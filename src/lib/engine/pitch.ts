@@ -16,7 +16,13 @@ export const mToSvg = (x: number, y: number) => ({
 export const X = (x: number) => (x - 16) * 10 + 20
 export const Y = (y: number) => (105 - y) * 10 + 40
 
-export const svgToM = (svgX: number, svgY: number) => ({
+// Full-pitch view (interactive editor, viewBox "-20 -20 720 1090"): inverse of mToSvg
+export const svgToFullM = (svgX: number, svgY: number) => ({
+  x: svgX / PX_PER_M,
+  y: PITCH_H - svgY / PX_PER_M,
+})
+
+export const svgToM =(svgX: number, svgY: number) => ({
   x: (svgX - 20) / 10 + 16,
   y: 105 - (svgY - 40) / 10,
 })

@@ -1,45 +1,293 @@
 'use client'
 
-// THE MAIN COMPONENT: SVG pitch with drag handles.
-// Renders players at their positions for the current step and lets the
-// coach drag them (move mode), draw passes/runs, or select for editing.
+/**
+ * @description Interactive SVG pitch editor for building soccer plays
+ * @props { play?: Play; onUpdate?: (play: Play) => void }
+ * @dataDependencies editorStore (useEditorStore)
+ */
 
-import { useEditorStore } from '@/lib/store/editorStore'
-import { X, Y } from '@/lib/engine/pitch'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEditorStore, type EditorMode } from '@/lib/store/editorStore'
+import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
+import { createDefaultPlay } from '@/lib/engine/defaultPlay'
+import type { Play } from '@/lib/types/play'
+import { Button } from '@/components/ui/button'
 
-export function PitchEditor() {
+interface PitchEditorProps {
+  play?: Play
+  onUpdate?: (play: Play) => void
+}
+
+type Pos = { x: number; y: number }
+
+const MODES: { mode: EditorMode; label: string }[] = [
+  { mode: 'select', label: 'Select' },
+  { mode: 'pass', label: 'Pass' },
+  { mode: 'run', label: 'Run' },
+  { mode: 'preview', label: 'Preview' },
+]
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+const LINE = { fill: 'none', stroke: 'white', strokeOpacity: 0.7, strokeWidth: 2 } as const
+
+/** Player positions as shown at the end of `stepIndex`: initial position, then moves from steps 1..stepIndex (step 0 is setup). */
+function positionsAt(play: Play, stepIndex: number): Map<string, Pos> {
+  const map = new Map<string, Pos>()
+  for (const p of play.players) map.set(p.id, { x: p.x, y: p.y })
+  for (let i = 1; i <= stepIndex; i++) {
+    for (const m of play.steps[i]?.moves ?? []) map.set(m.playerId, { x: m.toX, y: m.toY })
+  }
+  return map
+}
+
+function PitchMarkings() {
+  const w = PITCH_W * 10
+  const h = PITCH_H * 10
+  const cx = w / 2
+  // Penalty box 40.3 x 16.5m, goal area 18.3 x 5.5m, penalty spot 11m, arc radius 9.15m
+  const arcDx = 55
+  const arcDy = Math.sqrt(91.5 ** 2 - 55 ** 2)
+  const box = (top: boolean) => {
+    const dir = top ? 1 : -1
+    const goalLine = top ? 0 : h
+    const arcY = goalLine + dir * (165 + arcDy)
+    return (
+      <g key={top ? 'top' : 'bottom'}>
+        <rect x={cx - 201.5} y={top ? 0 : h - 165} width={403} height={165} {...LINE} />
+        <rect x={cx - 91.5} y={top ? 0 : h - 55} width={183} height={55} {...LINE} />
+        <circle cx={cx} cy={goalLine + dir * 110} r={2.5} fill="white" fillOpacity={0.7} />
+        <path d={`M ${cx - arcDx} ${arcY} A 91.5 91.5 0 0 ${top ? 0 : 1} ${cx + arcDx} ${arcY}`} {...LINE} />
+      </g>
+    )
+  }
+  return (
+    <g>
+      <rect x={0} y={0} width={w} height={h} {...LINE} />
+      <line x1={0} y1={h / 2} x2={w} y2={h / 2} {...LINE} />
+      <circle cx={cx} cy={h / 2} r={91.5} {...LINE} />
+      <circle cx={cx} cy={h / 2} r={2.5} fill="white" fillOpacity={0.7} />
+      {box(true)}
+      {box(false)}
+    </g>
+  )
+}
+
+export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {}) {
   const play = useEditorStore((s) => s.play)
+  const mode = useEditorStore((s) => s.mode)
+  const currentStepIndex = useEditorStore((s) => s.currentStepIndex)
   const selectedPlayerId = useEditorStore((s) => s.selectedPlayerId)
+  const setPlay = useEditorStore((s) => s.setPlay)
+  const setMode = useEditorStore((s) => s.setMode)
   const selectPlayer = useEditorStore((s) => s.selectPlayer)
+  const setCurrentStep = useEditorStore((s) => s.setCurrentStep)
+  const addStep = useEditorStore((s) => s.addStep)
+  const movePlayer = useEditorStore((s) => s.movePlayer)
+  const addPass = useEditorStore((s) => s.addPass)
+  const updatePlayerPosition = useEditorStore((s) => s.updatePlayerPosition)
+
+  const svgRef = useRef<SVGSVGElement>(null)
+  const dragRef = useRef<{ id: string; moved: boolean } | null>(null)
+  const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null)
+  // First click of a pass/run gesture: the source player.
+  const [pendingFrom, setPendingFrom] = useState<string | null>(null)
+
+  // Prop play wins; otherwise keep the store's play or build a default 4-4-2.
+  useEffect(() => {
+    if (playProp) setPlay(playProp)
+    else if (!useEditorStore.getState().play) setPlay(createDefaultPlay())
+  }, [playProp, setPlay])
+
+  useEffect(() => {
+    if (play) onUpdate?.(play)
+  }, [play, onUpdate])
+
+  useEffect(() => { setPendingFrom(null) }, [mode, currentStepIndex])
+
+  const positions = useMemo(() => (play ? positionsAt(play, currentStepIndex) : new Map<string, Pos>()), [play, currentStepIndex])
+  const prevPositions = useMemo(
+    () => (play && currentStepIndex > 0 ? positionsAt(play, currentStepIndex - 1) : null),
+    [play, currentStepIndex],
+  )
+
+  const toMeters = (e: { clientX: number; clientY: number }): Pos | null => {
+    const ctm = svgRef.current?.getScreenCTM()?.inverse()
+    if (!ctm) return null
+    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm)
+    const m = svgToFullM(pt.x, pt.y)
+    return { x: clamp(m.x, 0, PITCH_W), y: clamp(m.y, 0, PITCH_H) }
+  }
+
+  const step = play?.steps[currentStepIndex]
+  const canEdit = mode !== 'preview'
+
+  const commitPosition = (id: string, m: Pos) => {
+    if (currentStepIndex === 0) updatePlayerPosition(id, m.x, m.y)
+    else movePlayer(id, m.x, m.y, currentStepIndex)
+  }
+
+  const onPlayerDown = (e: React.PointerEvent<SVGGElement>, id: string) => {
+    if (!canEdit || !step) return
+    e.stopPropagation()
+    selectPlayer(id)
+    if (mode === 'pass') {
+      if (!pendingFrom) setPendingFrom(id)
+      else if (pendingFrom !== id) {
+        addPass({ from: pendingFrom, to: id, startTime: 0, endTime: step.duration }, currentStepIndex)
+        setPendingFrom(null)
+      }
+      return
+    }
+    if (mode === 'run') {
+      setPendingFrom(id)
+      return
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = { id, moved: false }
+    const pos = positions.get(id)
+    if (pos) setDrag({ id, ...pos })
+  }
+
+  const onPlayerMove = (e: React.PointerEvent<SVGGElement>) => {
+    if (!dragRef.current) return
+    const m = toMeters(e)
+    if (!m) return
+    dragRef.current.moved = true
+    setDrag({ id: dragRef.current.id, ...m })
+  }
+
+  const onPlayerUp = (e: React.PointerEvent<SVGGElement>) => {
+    const d = dragRef.current
+    if (!d) return
+    dragRef.current = null
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    const m = toMeters(e)
+    setDrag(null)
+    if (d.moved && m) commitPosition(d.id, m)
+  }
+
+  // Run tool, second click: the pitch point is the destination.
+  const onPitchDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (mode === 'select') selectPlayer(null)
+    if (mode !== 'run' || !pendingFrom) return
+    const m = toMeters(e)
+    if (!m) return
+    commitPosition(pendingFrom, m)
+    setPendingFrom(null)
+  }
+
+  const svgPos = (id: string) => {
+    const p = drag?.id === id ? drag : positions.get(id)
+    return p ? mToSvg(p.x, p.y) : null
+  }
+
+  const hint =
+    mode === 'pass' ? (pendingFrom ? 'Now click the receiving player' : 'Click the passer, then the receiver')
+    : mode === 'run' ? (pendingFrom ? 'Click the pitch to set the run destination' : 'Click a player, then a destination')
+    : mode === 'preview' ? 'Preview mode — editing is paused'
+    : 'Drag players to reposition them'
 
   return (
-    <svg
-      viewBox="0 0 580 890"
-      className="w-full h-full max-h-[85vh] bg-emerald-900 rounded-lg"
-      role="img"
-      aria-label="Soccer pitch editor"
-    >
-      {/* Pitch outline — half-pitch right side, reference style */}
-      <rect x={20} y={40} width={520} height={830} fill="none" stroke="white" strokeOpacity={0.5} strokeWidth={2} />
-      {play?.players.map((p) => (
-        <g
-          key={p.id}
-          transform={`translate(${X(p.x)}, ${Y(p.y)})`}
-          onClick={() => selectPlayer(p.id)}
-          className="cursor-pointer"
-          opacity={p.isContext ? 0.4 : 1}
-        >
-          <circle
-            r={14}
-            fill={p.team === 'ours' ? '#3b82f6' : '#ef4444'}
-            stroke={selectedPlayerId === p.id ? 'white' : 'transparent'}
-            strokeWidth={3}
-          />
-          <text textAnchor="middle" dy={5} fontSize={11} fill="white" fontWeight={700}>
-            {p.label}
-          </text>
-        </g>
-      ))}
-    </svg>
+    <div className="flex flex-col gap-2 w-full">
+      <div className="flex flex-wrap items-center gap-2" role="toolbar" aria-label="Pitch editor toolbar">
+        <div className="flex gap-1">
+          {MODES.map((m) => (
+            <Button
+              key={m.mode}
+              size="sm"
+              variant={mode === m.mode ? 'default' : 'secondary'}
+              aria-pressed={mode === m.mode}
+              data-testid={`mode-${m.mode}`}
+              onClick={() => setMode(m.mode)}
+            >
+              {m.label}
+            </Button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 ml-auto">
+          <Button size="sm" variant="outline" disabled={currentStepIndex <= 0}
+            onClick={() => setCurrentStep(currentStepIndex - 1)}>Prev Step</Button>
+          <span data-testid="step-counter" className="px-2 text-sm tabular-nums" aria-live="polite">
+            Step {currentStepIndex + 1} of {play?.steps.length ?? 1}
+          </span>
+          <Button size="sm" variant="outline" disabled={!play || currentStepIndex >= play.steps.length - 1}
+            onClick={() => setCurrentStep(currentStepIndex + 1)}>Next Step</Button>
+          <Button size="sm" variant="outline" onClick={addStep}>Add Step</Button>
+        </div>
+      </div>
+      <p className="text-xs text-slate-400" data-testid="editor-hint">{hint}</p>
+
+      <svg
+        ref={svgRef}
+        data-testid="pitch-svg"
+        viewBox="-20 -20 720 1090"
+        className="w-full h-auto max-h-[75vh] mx-auto rounded-lg bg-emerald-700 touch-none select-none"
+        role="img"
+        aria-label="Soccer pitch editor"
+        onPointerDown={onPitchDown}
+      >
+        <defs>
+          <marker id="arrow-pass" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0 0L10 5L0 10z" fill="white" />
+          </marker>
+          <marker id="arrow-run" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0 0L10 5L0 10z" fill="#fde047" />
+          </marker>
+        </defs>
+        <PitchMarkings />
+
+        {prevPositions && step?.moves.map((m) => {
+          const from = prevPositions.get(m.playerId)
+          if (!from) return null
+          const a = mToSvg(from.x, from.y)
+          const b = mToSvg(m.toX, m.toY)
+          return (
+            <line key={`run-${m.playerId}`} x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
+              stroke="#fde047" strokeWidth={3} strokeDasharray="8 6" markerEnd="url(#arrow-run)" data-testid="run-arrow" />
+          )
+        })}
+
+        {step?.passes.map((pass, i) => {
+          const a = svgPos(pass.from)
+          const b = svgPos(pass.to)
+          if (!a || !b) return null
+          return (
+            <line key={`pass-${i}`} x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
+              stroke="white" strokeWidth={3} markerEnd="url(#arrow-pass)" data-testid="pass-arrow" />
+          )
+        })}
+
+        {play?.players.map((p) => {
+          const s = svgPos(p.id)
+          if (!s) return null
+          const active = selectedPlayerId === p.id || pendingFrom === p.id
+          return (
+            <g
+              key={p.id}
+              data-testid={`player-${p.id}`}
+              data-team={p.team}
+              transform={`translate(${s.svgX}, ${s.svgY})`}
+              onPointerDown={(e) => onPlayerDown(e, p.id)}
+              onPointerMove={onPlayerMove}
+              onPointerUp={onPlayerUp}
+              onPointerCancel={onPlayerUp}
+              className={canEdit ? (mode === 'select' ? 'cursor-grab' : 'cursor-pointer') : ''}
+              style={{ touchAction: 'none' }}
+              opacity={p.isContext ? 0.4 : 1}
+            >
+              <circle
+                r={16}
+                fill={p.team === 'ours' ? '#2563eb' : '#dc2626'}
+                stroke={active ? '#fde047' : 'white'}
+                strokeWidth={active ? 4 : 2}
+              />
+              <text textAnchor="middle" dy={4} fontSize={11} fill="white" fontWeight={700} pointerEvents="none">
+                {p.label}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+    </div>
   )
 }
