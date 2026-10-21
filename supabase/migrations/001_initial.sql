@@ -1,9 +1,7 @@
--- Enable UUID extension
-create extension if not exists "uuid-ossp";
 
 -- Plays table
 create table plays (
-  id          uuid primary key default uuid_generate_v4(),
+  id          uuid primary key default gen_random_uuid(),
   author_id   uuid references auth.users(id) on delete cascade,
   author_name text not null default 'Anonymous',
   title       text not null,
