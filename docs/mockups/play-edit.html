@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Play UI - Edit mode</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{background:#05080b;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;color:#e8edf2}
+a{color:#4cc9f0}a:hover{color:#8fe3ff}
+button{font-family:inherit;cursor:pointer}
+a{cursor:pointer}
+
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px 16px;gap:40px;flex-wrap:wrap}
+.phone{width:390px;height:844px;border-radius:40px;overflow:hidden;position:relative;flex:none;
+  box-shadow:0 0 0 1px rgba(255,255,255,.06),0 30px 80px rgba(0,0,0,.7)}
+.phone>div{font-family:inherit !important}
+
+.pitch{position:relative;background:#0b1015}
+.pitch>svg{display:block}
+.note{position:absolute;left:12px;right:12px;display:flex;align-items:flex-start;gap:10px;padding:8px 12px 8px 9px;
+  border:1px solid rgba(255,255,255,.09);background:rgba(11,16,21,.88);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+  color:#e8edf2;border-radius:20px;text-align:left;font-size:13px;line-height:1.35;font-weight:500;
+  box-shadow:0 6px 20px rgba(0,0,0,.45);transition:border-radius .15s ease}
+.note:hover{border-color:rgba(255,255,255,.16)}
+.note-top{top:12px}.note-bottom{bottom:12px}
+.pitch-top{position:absolute;left:12px;right:12px;top:12px;display:flex;flex-direction:column;align-items:center;gap:8px}
+.pitch-top .note{position:static;width:100%}
+.note-badge{flex:none;width:22px;height:22px;border-radius:11px;display:grid;place-items:center;font-size:11px;font-weight:700}
+.note-top .note-badge{background:#4cc9f0;color:#04202b}
+.note-body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px;padding-top:2px}
+.note-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.note-desc{display:none;color:#9aa7b4;font-weight:400;font-size:12.5px;line-height:1.4}
+.note-chev{flex:none;width:16px;height:16px;color:#9aa7b4;margin-top:3px;transition:transform .15s ease}
+.note[aria-expanded="true"]{border-radius:14px}
+.note[aria-expanded="true"] .note-title{white-space:normal}
+.note[aria-expanded="true"] .note-desc{display:block}
+.note[aria-expanded="true"] .note-chev{transform:rotate(180deg)}
+/* editor-only guidance: teal, with a pencil, so it never reads as play content */
+.tip{display:inline-flex;align-items:center;gap:7px;padding:6px 12px 6px 9px;border-radius:999px;white-space:nowrap;
+  background:rgba(20,184,166,.16);border:1px solid rgba(20,184,166,.5);color:#ccfbf1;font-size:12px;font-weight:500;
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.tip svg{width:13px;height:13px;color:#14b8a6;flex:none}
+</style></head>
+<body>
+<div class="phone">
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #0b1015; color: #e8edf2; display: flex; flex-direction: column; padding-top: 54px">
+
+  <div style="height: 44px; display: flex; align-items: center; gap: 2px; padding: 0 8px; background: #0b1015; border-bottom: 1px solid #243040">
+    <a href="home.html" aria-label="Back" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #4cc9f0; text-decoration: none">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg>
+    </a>
+    <div style="flex: 1 1 auto; min-width: 0; padding-left: 2px; font-size: 16px; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #e8edf2">Right-side build-up</div>
+    <button type="button" aria-label="Undo" style="width: 40px; height: 44px; border: 0; background: none; color: #e8edf2; display: flex; align-items: center; justify-content: center">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg>
+    </button>
+    <button type="button" aria-label="Redo" style="width: 40px; height: 44px; border: 0; background: none; color: #5d6b7a; display: flex; align-items: center; justify-content: center">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 14l5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h3"></path></svg>
+    </button>
+    <a href="#" aria-label="Share" style="width: 40px; height: 44px; display: flex; align-items: center; justify-content: center; color: #e8edf2; text-decoration: none; margin-right: 2px">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v13"></path></svg>
+    </a>
+    <a href="home.html" aria-label="Done, back to plays" style="width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; text-decoration: none; border: 0; background: none; padding: 0; height: 44px; color: #14b8a6"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L19 7"/></svg></a>
+  </div>
+
+  <div class="pitch" style="height: 608px">
+    <svg width="390" height="608" viewBox="0 60 520 811" role="img" aria-label="Right half of the pitch, step 1: RCB passes to RB, CAM moves into the gap">
+      <defs>
+        <marker id="run-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#ffd43b"></path></marker>
+      </defs>
+      <rect x="0" y="0" width="520" height="900" fill="#2c7a3b"></rect><rect x="0" y="0" width="520" height="50" fill="#318541"></rect><rect x="0" y="100" width="520" height="50" fill="#318541"></rect>
+      <rect x="0" y="200" width="520" height="50" fill="#318541"></rect><rect x="0" y="300" width="520" height="50" fill="#318541"></rect><rect x="0" y="400" width="520" height="50" fill="#318541"></rect><rect x="0" y="500" width="520" height="50" fill="#318541"></rect><rect x="0" y="600" width="520" height="50" fill="#318541"></rect><rect x="0" y="700" width="520" height="50" fill="#318541"></rect><rect x="0" y="800" width="520" height="50" fill="#318541"></rect>
+      <rect x="248" y="0" width="136" height="900" fill="#fff" opacity="0.05"></rect>
+      <rect x="0" y="0" width="180" height="900" fill="#000" opacity="0.28"></rect>
+      <g fill="none" stroke="#fff" stroke-opacity="0.85" stroke-width="2">
+        <rect x="-1.6" y="0" width="403.2" height="165"></rect><rect x="88.4" y="0" width="183.2" height="55"></rect>
+        <path d="M106.9 165 A91.5 91.5 0 0 0 253.1 165"></path>
+        <line x1="0" y1="525" x2="520" y2="525"></line>
+        <circle cx="180" cy="525" r="91.5"></circle>
+        <line x1="520" y1="0" x2="520" y2="900"></line><line x1="0" y1="0" x2="520" y2="0"></line>
+        <line x1="180" y1="0" x2="180" y2="900" stroke-dasharray="7 7" stroke-opacity="0.45"></line>
+      </g>
+      <text x="90" y="400" font-size="12" fill="#fff" fill-opacity="0.6" text-anchor="middle">Attack ↑</text>
+
+      <line x1="460" y1="450" x2="500" y2="630" stroke="#ff6b6b" stroke-width="2" stroke-dasharray="5 5" opacity="0.8"></line>
+      <line x1="170" y1="260" x2="180" y2="290" stroke="#ff6b6b" stroke-width="2" stroke-dasharray="5 5" opacity="0.6"></line>
+      <path d="M190 410 L305 430" stroke="#ffd43b" stroke-width="2.5" stroke-dasharray="7 6" fill="none" marker-end="url(#run-arrow)"></path>
+      <line x1="300" y1="760" x2="500" y2="630" stroke="#fff" stroke-width="3" stroke-linecap="round"></line>
+      <line x1="300" y1="760" x2="500" y2="760" stroke="#ff9aa0" stroke-width="2" stroke-dasharray="6 6" opacity="0.7"></line>
+      <text x="400" y="780" font-size="13" font-weight="700" fill="#ff9aa0" text-anchor="middle">✗ Flat pass</text>
+
+      <g>
+        <rect x="330" y="668" width="140" height="26" rx="13" fill="#0b1015" fill-opacity="0.85" stroke="#ffd43b" stroke-width="1"></rect>
+        <text x="400" y="686" font-size="13" font-weight="700" fill="#ffe680" text-anchor="middle">Diagonal pass</text>
+      </g>
+
+      <g font-size="9" font-weight="700" fill="#fff" text-anchor="middle"><circle cx="180" cy="30" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="180" y="33">oGK</text>
+        <g opacity="0.55"><circle cx="50" cy="260" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="50" y="263">oRB</text></g>
+        <circle cx="170" cy="260" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="170" y="263">oCB</text>
+        <circle cx="290" cy="260" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="290" y="263">oCB</text>
+        <circle cx="410" cy="260" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="410" y="263">oLB</text>
+        <g opacity="0.55"><circle cx="40" cy="450" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="40" y="453">oRM</text></g>
+        <circle cx="190" cy="450" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="190" y="453">oCM</text>
+        <circle cx="310" cy="450" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="310" y="453">oCM</text>
+        <circle cx="460" cy="450" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="460" y="453">oLM</text>
+        <g opacity="0.55"><circle cx="130" cy="520" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="130" y="523">oST</text></g>
+        <circle cx="250" cy="520" r="14" fill="#e5484d" stroke="#fff" stroke-width="2"></circle><text x="250" y="523">oST</text>
+
+        <circle cx="180" cy="290" r="14" fill="#2f8cff" stroke="#fff" stroke-width="2"></circle><text x="180" y="293">ST</text>
+        <circle cx="460" cy="390" r="14" fill="#2f8cff" stroke="#fff" stroke-width="2"></circle><text x="460" y="393">RW</text>
+        <circle cx="190" cy="410" r="14" fill="#2f8cff" stroke="#fff" stroke-width="2"></circle><text x="190" y="413">CAM</text>
+        <g opacity="0.55"><circle cx="80" cy="570" r="14" fill="#2f8cff" stroke="#fff" stroke-width="2"></circle><text x="80" y="573">LCM</text></g>
+        <circle cx="280" cy="570" r="14" fill="#2f8cff" stroke="#fff" stroke-width="2"></circle><text x="280" y="573">CM</text>
+        <g opacity="0.55"><circle cx="90" cy="760" r="14" fill="#2f8cff" stroke="#fff" stroke-width="2"></circle><text x="90" y="763">LCB</text></g>
+        <circle cx="300" cy="760" r="14" fill="#2f8cff" stroke="#fff" stroke-width="2"></circle><text x="300" y="763">RCB</text>
+        <circle cx="500" cy="630" r="20" fill="none" stroke="#ffd43b" stroke-width="2.5"></circle>
+        <circle cx="500" cy="630" r="14" fill="#2f8cff" stroke="#fff" stroke-width="2"></circle><text x="500" y="633">RB</text>
+      </g>
+      <path d="M484 619 L498 611 L498 627 Z" fill="#fff" opacity="0.9"></path>
+      <circle cx="420" cy="682" r="5.5" fill="#fff" stroke="#111" stroke-width="1.6"></circle>
+    </svg><div class="pitch-top"><button type="button" class="note note-top" aria-expanded="false" aria-label="Step 1 notes: tap to expand"><span class="note-badge">1</span><span class="note-body"><span class="note-title">RCB passes to RB. The trigger pass is diagonal, never flat.</span><span class="note-desc">RB stays wide and faces the midfield. CAM moves into the gap.</span></span><svg class="note-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div role="status" class="tip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>Tap a target: an area, or a player to stick to</div></div>
+
+    
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px 12px; background: #0b1015; border-top: 1px solid #243040"><button type="button" aria-pressed="true" style="height: 44px; border: 0; border-radius: 10px; background: #14b8a6; color: #0f172a; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 10px; font-weight: 500; font-family: inherit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 5H19V11"></path><path d="M19 5L5 19"></path></svg>Pass</button><button type="button" style="height: 44px; border: 0; border-radius: 10px; background: none; color: #cbd5e1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 10px; font-weight: 500; font-family: inherit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20"></path><path d="m15 19-3 3-3-3"></path><path d="m19 9 3 3-3 3"></path><path d="M2 12h20"></path><path d="m5 9-3 3 3 3"></path><path d="m9 5 3-3 3 3"></path></svg>Move</button><button type="button" style="height: 44px; border: 0; border-radius: 10px; background: none; color: #cbd5e1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 10px; font-weight: 500; font-family: inherit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19 19 5"></path></svg>Line</button><button type="button" style="height: 44px; border: 0; border-radius: 10px; background: none; color: #cbd5e1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 10px; font-weight: 500; font-family: inherit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4l16 8-16 8 4-8z" fill="currentColor" stroke="none"></path></svg>Face</button></div>
+
+  <div style="flex: 1 1 auto; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; padding: 8px 12px 0 12px; background: #151b22; border-top: 1px solid #243040">
+    <div style="display: flex; gap: 10px; align-items: center">
+    <div style="flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center">
+      <button type="button" style="height: 36px; border-radius: 18px; border: 0; background: #2a3644; color: #e8edf2; font-size: 13px; font-weight: 700; font-family: inherit">0</button>
+      <button type="button" aria-current="step" style="height: 36px; border-radius: 18px; border: 0; background: #4cc9f0; color: #04202b; font-size: 13px; font-weight: 700; font-family: inherit">1</button>
+      <button type="button" style="height: 36px; border-radius: 18px; border: 0; background: #2a3644; color: #e8edf2; font-size: 13px; font-weight: 700; font-family: inherit">2</button>
+      <button type="button" style="height: 36px; border-radius: 18px; border: 0; background: #2a3644; color: #e8edf2; font-size: 13px; font-weight: 700; font-family: inherit">3</button>
+      <button type="button" style="height: 36px; border-radius: 18px; border: 0; background: #2a3644; color: #e8edf2; font-size: 13px; font-weight: 700; font-family: inherit">4</button>
+      <button type="button" style="height: 36px; border-radius: 18px; border: 0; background: #2a3644; color: #e8edf2; font-size: 13px; font-weight: 700; font-family: inherit">5</button>
+      <button type="button" aria-label="Add step" style="height: 36px; border-radius: 18px; border: 1px solid #34455a; background: none; color: #9aa7b4; font-size: 18px; font-family: inherit">+</button>
+    </div>
+    
+    </div>
+    <div style="display: flex; gap: 10px; align-items: start">
+    <div style="flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; align-items: start" aria-label="Branch steps"><div></div><div style="grid-column: span 1; display: flex; align-items: flex-end; height: 34px"><span style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end"><span aria-hidden="true" style="width: 0; height: 6px; border-left: 2px dotted rgba(76,201,240,0.7)"></span><button type="button" aria-expanded="false" aria-label="Branch 1a" style="width: 28px; height: 28px; border-radius: 14px; background: #1c242d; border: 1px dashed rgba(76,201,240,0.75); color: #e8edf2; font-size: 11px; font-weight: 600; font-family: inherit; padding: 0; display: flex; align-items: center; justify-content: center; flex: none">1a</button></span></div><div></div><div style="grid-column: span 3; display: flex; align-items: flex-end; height: 34px"><span style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end"><span aria-hidden="true" style="width: 0; height: 6px; border-left: 2px dotted rgba(76,201,240,0.7)"></span><button type="button" aria-expanded="true" aria-label="Branch 3a" style="width: 28px; height: 28px; border-radius: 14px; background: #17303d; border: 1px dashed rgba(76,201,240,0.75); color: #e8edf2; font-size: 11px; font-weight: 600; font-family: inherit; padding: 0; display: flex; align-items: center; justify-content: center; flex: none">3a</button></span><span aria-hidden="true" style="flex: none; width: 6px; height: 0; border-top: 2px dotted rgba(76,201,240,0.7); margin-bottom: 13px"></span><span style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end"><button type="button" aria-expanded="true" aria-label="Branch 3b" style="width: 28px; height: 28px; border-radius: 14px; background: #17303d; border: 1px dashed rgba(76,201,240,0.75); color: #e8edf2; font-size: 11px; font-weight: 600; font-family: inherit; padding: 0; display: flex; align-items: center; justify-content: center; flex: none">3b</button></span><span aria-hidden="true" style="flex: none; width: 6px; height: 0; border-top: 2px dotted rgba(76,201,240,0.7); margin-bottom: 13px"></span><span style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end"><button type="button" aria-expanded="true" aria-label="Branch 3c" style="width: 28px; height: 28px; border-radius: 14px; background: #17303d; border: 1px dashed rgba(76,201,240,0.75); color: #e8edf2; font-size: 11px; font-weight: 600; font-family: inherit; padding: 0; display: flex; align-items: center; justify-content: center; flex: none">3c</button></span></div><div></div></div>
+    
+    </div>
+  </div>
+</div>
+</div><script>
+document.querySelectorAll('.note').forEach(function (b) {
+  b.addEventListener('click', function () {
+    b.setAttribute('aria-expanded', b.getAttribute('aria-expanded') !== 'true');
+  });
+});
+</script>
+</body></html>
