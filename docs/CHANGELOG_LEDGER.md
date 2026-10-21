@@ -8,3 +8,4 @@
 - v0.5.1 — feat: New Play page (/new, title input + Create Play), desktop viewer sidebar on /play/[id] (pitch left, title + step list right)
 
 - v0.5.2 — fix: UI rebuild — teal header, icon toolbar, full-height pitch, play card list, no spurious banners
+- v0.5.3 — fix: use gen_random_uuid() in migration, add supabase/.temp to .gitignore
