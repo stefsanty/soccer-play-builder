@@ -19,6 +19,8 @@ interface AnimatedPitchProps {
   onStepChange?: (n: number) => void
   /** Start playing on mount and whenever the step changes. Default true. */
   autoPlay?: boolean
+  /** Leave present mode (shown as an Edit button in the bottom bar). */
+  onExit?: () => void
 }
 
 type Pt = [number, number]
@@ -43,7 +45,7 @@ function trailPath(points: Pt[], progress: number): string {
   return d
 }
 
-export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true }: AnimatedPitchProps) {
+export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, onExit }: AnimatedPitchProps) {
   const engine = useAnimationEngine(play, stepIndex)
   const { frame, isPlaying, progress } = engine
   const startPlayback = engine.play
@@ -59,7 +61,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true }
       <svg
         data-testid="animated-pitch-svg"
         viewBox="-20 -20 720 1090"
-        className="mx-auto h-auto max-h-[75vh] w-full select-none rounded-lg bg-emerald-700"
+        className="mx-auto h-auto max-h-[75vh] w-full select-none rounded-lg bg-[#16a34a]"
         role="img"
         aria-label="Animated soccer play"
       >
@@ -91,7 +93,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true }
           const s = mToSvg(p.x, p.y)
           return (
             <g key={p.id} data-testid={`anim-player-${p.id}`} data-team={p.team} transform={`translate(${s.svgX}, ${s.svgY})`}>
-              <circle r={16} fill={p.team === 'ours' ? '#2563eb' : '#dc2626'} stroke="white" strokeWidth={2} />
+              <circle r={16} fill={p.team === 'ours' ? '#0ea5e9' : '#ef4444'} stroke="white" strokeWidth={2} />
               <text textAnchor="middle" dy={4} fontSize={11} fill="white" fontWeight={700} pointerEvents="none">
                 {p.label}
               </text>
@@ -110,30 +112,41 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true }
         })()}
       </svg>
 
-      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Playback controls">
-        <Button size="sm" data-testid="play-toggle" aria-label={isPlaying ? 'Pause' : 'Play'}
-          onClick={isPlaying ? engine.pause : engine.play}>
-          {isPlaying ? '⏸ Pause' : '▶ Play'}
-        </Button>
-        <Button size="sm" variant="secondary" data-testid="reset" onClick={engine.reset}>Reset</Button>
+      {/* Present mode: playback bar replaces the editor toolbar at the bottom of the screen. */}
+      <div className="h-28" aria-hidden />
+      <div
+        className="fixed bottom-0 left-1/2 z-20 flex w-full max-w-[390px] -translate-x-1/2 flex-col gap-2 border-t border-slate-800 bg-[var(--app-bg)]/95 p-3 backdrop-blur"
+        role="group"
+        aria-label="Playback controls"
+      >
         <input
           type="range"
           data-testid="progress-bar"
           aria-label="Playback progress"
-          className="min-w-32 flex-1 accent-emerald-500"
+          className="w-full accent-[#14b8a6]"
           min={0}
           max={1000}
           value={Math.round(progress * 1000)}
           onChange={(e) => engine.seek(Number(e.target.value) / 1000)}
         />
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="outline" aria-label="Previous step" disabled={!onStepChange || stepIndex <= 0}
-            onClick={() => onStepChange?.(stepIndex - 1)}>◀</Button>
-          <span data-testid="anim-step-indicator" className="px-1 text-sm tabular-nums">
-            Step {stepIndex + 1} of {total}
-          </span>
-          <Button size="sm" variant="outline" aria-label="Next step" disabled={!onStepChange || stepIndex >= total - 1}
-            onClick={() => onStepChange?.(stepIndex + 1)}>▶</Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" data-testid="play-toggle" aria-label={isPlaying ? 'Pause' : 'Play'}
+            onClick={isPlaying ? engine.pause : engine.play}>
+            {isPlaying ? '⏸' : '▶'}
+          </Button>
+          <Button size="sm" variant="secondary" data-testid="reset" onClick={engine.reset}>Reset</Button>
+          <div className="ml-auto flex items-center gap-1">
+            <Button size="sm" variant="ghost" aria-label="Previous step" disabled={!onStepChange || stepIndex <= 0}
+              onClick={() => onStepChange?.(stepIndex - 1)}>◀</Button>
+            <span data-testid="anim-step-indicator" className="px-1 text-sm tabular-nums text-slate-300">
+              Step {stepIndex + 1} of {total}
+            </span>
+            <Button size="sm" variant="ghost" aria-label="Next step" disabled={!onStepChange || stepIndex >= total - 1}
+              onClick={() => onStepChange?.(stepIndex + 1)}>▶</Button>
+          </div>
+          {onExit && (
+            <Button size="sm" variant="outline" data-testid="mode-select" onClick={onExit}>Edit</Button>
+          )}
         </div>
       </div>
     </div>
