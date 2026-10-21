@@ -75,6 +75,15 @@ export interface AnnotationOffside {
   label: string
 }
 
+/** Dotted "pass option" lines between player pairs, shown while t is in [from, to) (to: null = until the end). */
+export interface OptionGroup {
+  pairs: [string, string][]
+  /** One per pair; `a` says which end of the line the label sits at. */
+  labels?: { t: string; a: 'start' | 'end' }[]
+  from: number
+  to: number | null
+}
+
 export interface PlayStep {
   id: string
   index: number
@@ -90,6 +99,10 @@ export interface PlayStep {
   gapAnnotation?: AnnotationGap
   restAnnotation?: AnnotationRest
   offsideAnnotation?: AnnotationOffside
+  options?: OptionGroup[]
+  diagPass?: { pass: number; from: number }   // callout "Diagonal pass" on passes[pass] from time `from`
+  hasAlt?: boolean            // an alternative branch starts after this step
+  altAfter?: number           // list position: the branch is offered after this main step
   isAltBranch?: boolean       // alternate path branch
   altFrom?: number            // which main step this branches from
   altLabel?: string

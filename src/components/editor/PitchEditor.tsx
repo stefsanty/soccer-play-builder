@@ -15,7 +15,8 @@ import { StepNote } from './StepNote'
 import { AnimatedPitch } from './AnimatedPitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import type { Play } from '@/lib/types/play'
-import { ballHolderAfter } from '@/lib/engine/ballHolder'
+import { ballHolderAfter, stepChain } from '@/lib/engine/ballHolder'
+import { getTimeline } from '@/lib/engine/simulator'
 import { haptic } from '@/lib/haptics'
 import { Check, CircleDot, Move, MoveUpRight, Pencil, X, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -34,11 +35,13 @@ const MODES: { mode: EditorMode; label: string; Icon: LucideIcon }[] = [
 ]
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
-/** Player positions as shown at the end of `stepIndex`: initial position, then moves from steps 1..stepIndex (step 0 is setup). */
+/** Player positions as shown at the end of `stepIndex`: initial position, then the moves of every step on its
+ *  chain (step 0 is setup; a branch step continues from the main step it branches off, not the one listed before it). */
 function positionsAt(play: Play, stepIndex: number): Map<string, Pos> {
   const map = new Map<string, Pos>()
   for (const p of play.players) map.set(p.id, { x: p.x, y: p.y })
-  for (let i = 1; i <= stepIndex; i++) {
+  for (const i of stepChain(play, stepIndex)) {
+    if (i === 0) continue
     for (const m of play.steps[i]?.moves ?? []) map.set(m.playerId, { x: m.toX, y: m.toY })
   }
   return map
@@ -112,10 +115,17 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     }
   }, [mode, selectPlayer])
 
-  const positions = useMemo(() => (play ? positionsAt(play, currentStepIndex) : new Map<string, Pos>()), [play, currentStepIndex])
+  // Edit view = the simulated state at the END of the current step (our authored moves landed, defenders
+  // settled by their rules); run arrows start from the step's start state.
+  const timeline = useMemo(() => (play && play.steps.length > 0 ? getTimeline(play, currentStepIndex) : null), [play, currentStepIndex])
+  const positions = useMemo(() => {
+    if (!play) return new Map<string, Pos>()
+    if (!timeline) return positionsAt(play, currentStepIndex)
+    return new Map(Object.entries(timeline.end).map(([id, p]) => [id, { x: p.x, y: p.y }] as const))
+  }, [play, timeline, currentStepIndex])
   const prevPositions = useMemo(
-    () => (play && currentStepIndex > 0 ? positionsAt(play, currentStepIndex - 1) : null),
-    [play, currentStepIndex],
+    () => (timeline && currentStepIndex > 0 ? new Map(Object.entries(timeline.start).map(([id, p]) => [id, { x: p.x, y: p.y }] as const)) : null),
+    [timeline, currentStepIndex],
   )
 
   const toMeters = (e: { clientX: number; clientY: number }): Pos | null => {
@@ -338,7 +348,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           )}
         </svg>
         <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col items-center gap-2">
-          {step && <StepNote key={step.id} index={currentStepIndex} title={step.title} detail={step.narrativeOurs.join(' ')} />}
+          {step && <StepNote key={step.id} badge={step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex} title={step.title} detail={step.narrativeOurs.join(' ')} />}
           {holderId && (
             <div data-testid="ball-chip" className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-[rgba(11,16,21,0.88)] px-3 py-1 text-xs font-semibold text-[#e8edf2] shadow-lg backdrop-blur-md">
               <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />
@@ -406,14 +416,14 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                   key={st.id}
                   type="button"
                   data-testid={`step-chip-${i}`}
-                  aria-label={`Step ${i}`}
+                  aria-label={`Step ${st.isAltBranch ? (st.altLabel ?? i) : i}`}
                   aria-current={i === currentStepIndex ? 'step' : undefined}
                   onClick={() => goToStep(i)}
                   className={`h-9 min-w-9 shrink-0 touch-manipulation select-none rounded-full px-2 text-[13px] font-bold transition-all duration-100 active:scale-90 ${
                     i === currentStepIndex ? 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]' : 'bg-[var(--app-chip)] text-[#e8edf2]'
-                  }`}
+                  } ${st.isAltBranch ? 'border border-dashed border-[#4cc9f0]' : ''}`}
                 >
-                  {i}
+                  {st.isAltBranch ? (st.altLabel ?? i) : i}
                 </button>
               ))}
               <button type="button" aria-label="Add Step" onClick={handleAddStep}

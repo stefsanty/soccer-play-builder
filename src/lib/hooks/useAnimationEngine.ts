@@ -2,10 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Play } from '@/lib/types/play'
-import { computeFrame, stepSeconds, type FrameState } from '@/lib/engine/computeFrame'
+import { stepSeconds } from '@/lib/engine/computeFrame'
+import { getTimeline, sampleTimeline, type SimFrame, type StepTimeline } from '@/lib/engine/simulator'
 
 export interface AnimationEngine {
-  frame: FrameState | null
+  frame: SimFrame | null
+  /** The simulated step the frame comes from (annotations, pass origins, start state). */
+  timeline: StepTimeline | null
+  /** Seconds into the step. */
+  time: number
   isPlaying: boolean
   /** Start (or resume) playback; restarts from 0 if the step already finished. */
   play: () => void
@@ -72,7 +77,9 @@ export function useAnimationEngine(play: Play | null, stepIndex: number, speed =
     return () => cancelAnimationFrame(raf)
   }, [isPlaying, play, duration])
 
-  const frame = useMemo(() => (play ? computeFrame(play, stepIndex, progress) : null), [play, stepIndex, progress])
+  const timeline = useMemo(() => (play && play.steps.length > 0 ? getTimeline(play, stepIndex) : null), [play, stepIndex])
+  const time = progress * duration
+  const frame = useMemo(() => (timeline ? sampleTimeline(timeline, time) : null), [timeline, time])
 
-  return { frame, isPlaying, play: start, pause, seek, reset, progress }
+  return { frame, timeline, time, isPlaying, play: start, pause, seek, reset, progress }
 }

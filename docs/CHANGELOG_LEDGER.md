@@ -16,3 +16,4 @@
 - v0.7.2 — feat: MVP is editor-only — home play cards open /editor/[id] directly (shared viewer /play/[id] kept for share links)
 - v0.8.0 — feat: action toolbar (Move/Pass/Run) only appears once a player is selected (Escape, tap-again or tap-pitch dismisses); Edit | Play toggle in the header with playback speed 0.5x-2x
 - v0.8.1 — feat: Play mode is the Edit layout with the toolbar swapped for a floating playback panel (Restart/Prev/Play-Pause/Next/speed) and the same step strip; pitch, header and step strip identical across modes
+- v0.9.0 — feat: pattern-of-play engine — 60 Hz step simulator (tweens, ball carry/flight/lob, zone+mark defenders with VMAX/AMAX + separation, smooth facing, persistent rules, branch steps); Play mode renders runs, options, marks, gap, rest, offside, cone, diagonal callout; seeded "Right-side build-up: 4-5-1" (replaces Sample Play)
