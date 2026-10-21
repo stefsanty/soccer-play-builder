@@ -33,9 +33,17 @@ npm run dev                        # http://localhost:3000
 | `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Your Supabase anon (public) key |
 
-### Database
+### Database (Supabase)
 
-Apply the migration in `supabase/migrations/001_initial.sql` to your Supabase project (SQL editor or `supabase db push`). It creates the `plays` table with row-level security: public plays are readable by anyone; authors manage their own.
+The app works without a database — the editor runs and a banner reads "Database not configured — plays won't be saved." Saving is disabled until you configure Supabase:
+
+1. Create a **new** Supabase project at [supabase.com](https://supabase.com) (don't reuse another app's project).
+2. In the SQL editor, run `supabase/migrations/001_initial.sql`, then `supabase/migrations/002_mvp_open_access.sql` (MVP has no auth, so 002 opens read/write to the anon key; tighten it when sign-in lands).
+3. Copy **Project URL** and the **anon public** key (Project Settings → API) into `.env.local` (locally) and the Vercel project's Environment Variables (then redeploy — `NEXT_PUBLIC_*` values are inlined at build time):
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+API: `GET/POST /api/plays`, `GET/PUT/DELETE /api/plays/:id` (503 when the database isn't configured).
 
 ### Scripts
 
