@@ -10,3 +10,4 @@
 - v0.5.2 — fix: UI rebuild — teal header, icon toolbar, full-height pitch, play card list, no spurious banners
 - v0.5.3 — fix: use gen_random_uuid() in migration, add supabase/.temp to .gitignore
 - v0.6.0 — feat: rebuild UI to match docs/mockups — home list with offline banner + thumbnails, striped pitch editor with step-note pill, icon toolbar and step chips, shared-play viewer with step list
+- v0.6.1 — fix: penalty arcs on the pitch now meet the penalty box edge (arc endpoints were swapped)

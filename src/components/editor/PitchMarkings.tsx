@@ -7,12 +7,13 @@ export function PitchMarkings() {
   const h = PITCH_H * 10
   const cx = w / 2
   // Penalty box 40.3 x 16.5m, goal area 18.3 x 5.5m, penalty spot 11m, arc radius 9.15m
-  const arcDx = 55
-  const arcDy = Math.sqrt(91.5 ** 2 - 55 ** 2)
+  // The arc is the part of the 9.15m circle around the spot that lies outside the box:
+  // it meets the box edge (16.5m from the goal line, 5.5m past the spot) at +/- sqrt(91.5^2 - 55^2).
+  const arcDx = Math.sqrt(91.5 ** 2 - 55 ** 2)
   const box = (top: boolean) => {
     const dir = top ? 1 : -1
     const goalLine = top ? 0 : h
-    const arcY = goalLine + dir * (165 + arcDy)
+    const arcY = goalLine + dir * 165
     return (
       <g key={top ? 'top' : 'bottom'}>
         <rect x={cx - 201.5} y={top ? 0 : h - 165} width={403} height={165} {...LINE} />
