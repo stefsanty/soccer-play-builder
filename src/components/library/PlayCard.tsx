@@ -62,7 +62,7 @@ export function stepSummary(play: Play): string {
 export function PlayCard({ play }: PlayCardProps) {
   return (
     <Link
-      href={`/play/${play.id}`}
+      href={`/editor/${play.id}`}
       className="flex touch-manipulation items-center gap-3.5 rounded-[14px] bg-[var(--app-card)] p-3 text-[#e8edf2] no-underline transition-all duration-100 hover:bg-[#1a222b] active:scale-[0.98] active:bg-[#202a35]"
     >
       <PitchThumb play={play} />

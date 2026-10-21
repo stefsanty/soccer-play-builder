@@ -13,3 +13,4 @@
 - v0.6.1 — fix: penalty arcs on the pitch now meet the penalty box edge (arc endpoints were swapped)
 - v0.7.0 — feat: editor interaction feedback — press/hover states, selected + pending player rings, ball marker with holder ring and "Ball: X" chip, action confirmations, haptic vibration
 - v0.7.1 — fix: wire PitchEditor into /editor/[id] (was a "coming soon" placeholder); saving an existing play updates it instead of creating a copy
+- v0.7.2 — feat: MVP is editor-only — home play cards open /editor/[id] directly (shared viewer /play/[id] kept for share links)
