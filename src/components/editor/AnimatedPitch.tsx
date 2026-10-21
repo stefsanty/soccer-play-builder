@@ -95,8 +95,8 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
           const s = mToSvg(p.x, p.y)
           return (
             <g key={p.id} data-testid={`anim-player-${p.id}`} data-team={p.team} transform={`translate(${s.svgX}, ${s.svgY})`}>
-              <circle r={16} fill={p.team === 'ours' ? '#0ea5e9' : '#ef4444'} stroke="white" strokeWidth={2} />
-              <text textAnchor="middle" dy={4} fontSize={11} fill="white" fontWeight={700} pointerEvents="none">
+              <circle r={24} fill={p.team === 'ours' ? '#0ea5e9' : '#ef4444'} stroke={p.team === 'ours' ? '#0369a1' : '#b91c1c'} strokeWidth={3} />
+              <text textAnchor="middle" dy={6} fontSize={17} fill="white" fontWeight={700} pointerEvents="none">
                 {p.label}
               </text>
             </g>

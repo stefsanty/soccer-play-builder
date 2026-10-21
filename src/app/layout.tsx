@@ -28,8 +28,10 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <div className="relative mx-auto min-h-screen w-full max-w-[390px] bg-[var(--app-bg)] sm:border-x sm:border-slate-800">
-          {children}
+        <div className="flex min-h-dvh justify-center bg-[var(--bg-base)]">
+          <div className="relative flex min-h-dvh w-full max-w-[390px] flex-col bg-[var(--bg-base)] sm:border-x sm:border-slate-800">
+            {children}
+          </div>
         </div>
       </body>
     </html>
