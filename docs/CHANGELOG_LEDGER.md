@@ -5,3 +5,4 @@
 - v0.3.0 — feat: animation playback engine (rAF loop, trapezoid easing, pass/run animations), preview mode with scrubable progress bar
 - v0.4.0 — feat: Supabase wiring (save/load plays, library fetch), graceful no-DB degradation
 - v0.5.0 — feat: dark mobile-first UI (390px phone container, teal accent, play card grid + New Play FAB, bottom toolbar/present bar, teal/red players)
+- v0.5.1 — feat: New Play page (/new, title input + Create Play), desktop viewer sidebar on /play/[id] (pitch left, title + step list right)

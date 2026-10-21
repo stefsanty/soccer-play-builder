@@ -17,7 +17,7 @@ export default function HomePage() {
 
       <div className="pointer-events-none fixed bottom-0 left-1/2 z-20 flex w-full max-w-[390px] -translate-x-1/2 justify-end p-4">
         <Link
-          href="/editor"
+          href="/new"
           className="pointer-events-auto rounded-full bg-[#14b8a6] px-5 py-3 text-sm font-semibold text-[#0f172a] shadow-lg transition-colors hover:bg-[#2dd4bf]"
         >
           + New Play

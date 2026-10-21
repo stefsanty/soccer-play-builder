@@ -21,6 +21,8 @@ interface AnimatedPitchProps {
   autoPlay?: boolean
   /** Leave present mode (shown as an Edit button in the bottom bar). */
   onExit?: () => void
+  /** Render the playback bar in normal flow instead of fixed to the bottom of the phone frame. */
+  inline?: boolean
 }
 
 type Pt = [number, number]
@@ -45,7 +47,7 @@ function trailPath(points: Pt[], progress: number): string {
   return d
 }
 
-export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, onExit }: AnimatedPitchProps) {
+export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, onExit, inline = false }: AnimatedPitchProps) {
   const engine = useAnimationEngine(play, stepIndex)
   const { frame, isPlaying, progress } = engine
   const startPlayback = engine.play
@@ -113,9 +115,13 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
       </svg>
 
       {/* Present mode: playback bar replaces the editor toolbar at the bottom of the screen. */}
-      <div className="h-28" aria-hidden />
+      {!inline && <div className="h-28" aria-hidden />}
       <div
-        className="fixed bottom-0 left-1/2 z-20 flex w-full max-w-[390px] -translate-x-1/2 flex-col gap-2 border-t border-slate-800 bg-[var(--app-bg)]/95 p-3 backdrop-blur"
+        className={
+          inline
+            ? 'flex w-full flex-col gap-2 rounded-lg bg-[var(--app-card)] p-3'
+            : 'fixed bottom-0 left-1/2 z-20 flex w-full max-w-[390px] -translate-x-1/2 flex-col gap-2 border-t border-slate-800 bg-[var(--app-bg)]/95 p-3 backdrop-blur'
+        }
         role="group"
         aria-label="Playback controls"
       >
