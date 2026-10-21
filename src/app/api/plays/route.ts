@@ -1,52 +1,39 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { SUPABASE_NOT_CONFIGURED } from '@/lib/supabase/config'
+import { insertToRow, rowToPlay, type PlayRow } from '@/lib/api/playMapping'
 
-// GET /api/plays — list public plays (and the caller's own, when signed in)
+const noDb = () => NextResponse.json({ error: SUPABASE_NOT_CONFIGURED }, { status: 503 })
+
+// GET /api/plays — list public plays
 export async function GET() {
   const supabase = await createClient()
+  if (!supabase) return noDb()
+
   const { data, error } = await supabase
     .from('plays')
     .select('*')
+    .eq('is_public', true)
     .order('created_at', { ascending: false })
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-  return NextResponse.json({ plays: data })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ plays: (data as PlayRow[]).map(rowToPlay) })
 }
 
-// POST /api/plays — create a play for the signed-in user
+// POST /api/plays — create a play (body is the Play JSON). MVP: no auth.
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  if (!supabase) return noDb()
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let body
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const body = await request.json()
-  const { data, error } = await supabase
-    .from('plays')
-    .insert({
-      author_id: user.id,
-      author_name: body.authorName ?? 'Anonymous',
-      title: body.title ?? 'Untitled play',
-      description: body.description ?? null,
-      formation: body.meta?.formation ?? 'custom',
-      is_public: body.meta?.isPublic ?? false,
-      tags: body.meta?.tags ?? [],
-      view_side: body.meta?.viewSide ?? 'right',
-      players: body.players ?? [],
-      steps: body.steps ?? [],
-      fork_of: body.meta?.forkOf ?? null,
-    })
-    .select()
-    .single()
+  const { data, error } = await supabase.from('plays').insert(insertToRow(body)).select().single()
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-  return NextResponse.json({ play: data }, { status: 201 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ play: rowToPlay(data as PlayRow) }, { status: 201 })
 }

@@ -1,8 +1,12 @@
 import { createBrowserClient } from '@supabase/ssr'
+import { getSupabaseEnv, warnNotConfigured } from './config'
 
+/** Browser client, or null (with a console warning) when env vars are missing. */
 export function createClient() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
+  const env = getSupabaseEnv()
+  if (!env) {
+    warnNotConfigured()
+    return null
+  }
+  return createBrowserClient(env.url, env.anonKey)
 }
