@@ -172,3 +172,17 @@ describe('simulateStep on the pattern-of-play data', () => {
     expect(tl.end.b.x).toBeCloseTo(30, 6)
   })
 })
+
+describe('facing without a ball', () => {
+  it('defenders keep facing down the pitch when the play has no ball', () => {
+    const draft: Play = {
+      ...play(),
+      id: 'noball',
+      players: [{ id: 'a', team: 'ours', label: 'A', x: 10, y: 10 }, { id: 'b', team: 'opp', label: 'B', x: 30, y: 60 }],
+      steps: [{ ...play().steps[0], duration: 1, faceTargets: [], defenderRules: {}, passes: [], moves: [] }],
+    }
+    const tl = getTimeline(draft, 0)
+    expect(tl.end.b.face).toBeCloseTo(Math.PI / 2, 6) // not turned towards a phantom ball at (0, 0)
+    expect(tl.end.a.face).toBeCloseTo(-Math.PI / 2, 6)
+  })
+})

@@ -29,6 +29,10 @@ interface EditorState {
   movePlayer: (playerId: string, toX: number, toY: number, stepIndex: number) => void
   addPass: (pass: PassAnimation, stepIndex: number) => void
   updatePlayerPosition: (playerId: string, x: number, y: number) => void  // initial position
+  /** Show/hide the arrow of one move in a step (`hidden: true` on the move). */
+  toggleMoveHidden: (playerId: string, stepIndex: number) => void
+  /** Hide or show every move arrow of a step. */
+  setStepMovesHidden: (stepIndex: number, hidden: boolean) => void
   setIsPlaying: (v: boolean) => void
   setPreviewTime: (t: number) => void
   markSaved: () => void
@@ -83,6 +87,7 @@ export const useEditorStore = create<EditorState>()(
       const step = s.play.steps[stepIndex]
       const existing = step.moves.findIndex(m => m.playerId === playerId)
       const move: PlayerMove = { playerId, toX, toY, startTime: 0, endTime: step.duration }
+      if (existing >= 0 && step.moves[existing].hidden) move.hidden = true // re-aiming a run keeps its arrow hidden
       if (existing >= 0) step.moves[existing] = move
       else step.moves.push(move)
       s.isDirty = true
@@ -96,6 +101,22 @@ export const useEditorStore = create<EditorState>()(
       if (!s.play) return
       const player = s.play.players.find(p => p.id === playerId)
       if (player) { player.x = x; player.y = y }
+      s.isDirty = true
+    }),
+    toggleMoveHidden: (playerId, stepIndex) => set((s) => {
+      const move = s.play?.steps[stepIndex]?.moves.find((m) => m.playerId === playerId)
+      if (!move) return
+      if (move.hidden) delete move.hidden
+      else move.hidden = true
+      s.isDirty = true
+    }),
+    setStepMovesHidden: (stepIndex, hidden) => set((s) => {
+      const moves = s.play?.steps[stepIndex]?.moves
+      if (!moves) return
+      for (const m of moves) {
+        if (hidden) m.hidden = true
+        else delete m.hidden
+      }
       s.isDirty = true
     }),
     setIsPlaying: (v) => set((s) => { s.isPlaying = v }),

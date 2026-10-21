@@ -40,6 +40,7 @@ export interface PlayerMove {
   endTime: number
   easeFraction?: number
   via?: [number, number]  // bezier control point
+  hidden?: boolean        // don't draw this run's arrow (the move itself still happens)
 }
 
 export interface PassAnimation {

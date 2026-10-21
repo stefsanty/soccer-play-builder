@@ -12,11 +12,12 @@ import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { PitchMarkings } from './PitchMarkings'
 import { PitchSurface } from './PitchSurface'
 import { StepNote } from './StepNote'
+import { RunsPanel } from './RunsPanel'
 import { AnimatedPitch } from './AnimatedPitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import type { Play } from '@/lib/types/play'
 import { ballHolderAfter, stepChain } from '@/lib/engine/ballHolder'
-import { getTimeline } from '@/lib/engine/simulator'
+import { BALL_OFFSET, getTimeline } from '@/lib/engine/simulator'
 import { haptic } from '@/lib/haptics'
 import { Check, CircleDot, Move, MoveUpRight, Pencil, X, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -60,6 +61,8 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const movePlayer = useEditorStore((s) => s.movePlayer)
   const addPass = useEditorStore((s) => s.addPass)
   const updatePlayerPosition = useEditorStore((s) => s.updatePlayerPosition)
+  const toggleMoveHidden = useEditorStore((s) => s.toggleMoveHidden)
+  const setStepMovesHidden = useEditorStore((s) => s.setStepMovesHidden)
 
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<{ id: string; moved: boolean; wasSelected: boolean } | null>(null)
@@ -181,8 +184,14 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
       return
     }
     if (mode === 'run') {
-      if (pendingFrom === id) clearSelection()
-      else setPendingFrom(id)
+      if (!pendingFrom) setPendingFrom(id)
+      else if (pendingFrom === id) clearSelection()
+      else {
+        // ending a run on another player's spot (closing him down, supporting him): use where he stands
+        const dest = positions.get(id)
+        if (dest) commitPosition(pendingFrom, { x: dest.x, y: dest.y })
+        clearSelection()
+      }
       return
     }
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -224,8 +233,15 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     return p ? mToSvg(p.x, p.y) : null
   }
 
+  // Facing at the end of the step (what the editor shows), and draw order: opponents underneath, our players
+  // on top, so a defender pressing a receiver never hides (or steals taps from) the receiver.
+  const faceOf = (id: string, team: 'ours' | 'opp') => timeline?.end[id]?.face ?? (team === 'ours' ? -Math.PI / 2 : Math.PI / 2)
+  const drawOrder = play ? [...play.players].sort((a, b) => Number(a.team === 'ours') - Number(b.team === 'ours')) : []
+
   const holderId = play ? ballHolderAfter(play, currentStepIndex) : null
   const holderPos = holderId ? svgPos(holderId) : null
+  const holderTeam = play?.players.find((p) => p.id === holderId)?.team ?? 'ours'
+  const holderFace = holderId ? faceOf(holderId, holderTeam) : 0
 
   const tip =
     mode === 'pass' ? (pendingFrom ? 'Now tap the receiving player' : 'Tap the passer, then the receiver')
@@ -261,7 +277,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
 
           {prevPositions && step?.moves.map((m) => {
             const from = prevPositions.get(m.playerId)
-            if (!from) return null
+            if (!from || m.hidden) return null
             const a = mToSvg(from.x, from.y)
             const b = mToSvg(m.toX, m.toY)
             return (
@@ -269,6 +285,18 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                 stroke="#ffd43b" strokeWidth={3} strokeDasharray="8 6" markerEnd="url(#arrow-run)" data-testid="run-arrow" className="arrow-in" />
             )
           })}
+
+          {step?.options?.map((g, gi) =>
+            g.pairs.map(([a, b], pi) => {
+              const ca = svgPos(a)
+              const cb = svgPos(b)
+              if (!ca || !cb) return null
+              return (
+                <line key={`opt-${gi}-${pi}`} data-testid="option-line" x1={ca.svgX} y1={ca.svgY} x2={cb.svgX} y2={cb.svgY}
+                  stroke="#4cc9f0" strokeWidth={3} strokeDasharray="9 7" strokeLinecap="round" opacity={0.7} pointerEvents="none" />
+              )
+            }),
+          )}
 
           {step?.passes.map((pass, i) => {
             const a = svgPos(pass.from)
@@ -293,7 +321,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
               strokeDasharray="6 5" pointerEvents="none" data-testid="ball-holder-ring" />
           )}
 
-          {play?.players.map((p) => {
+          {drawOrder.map((p) => {
             const s = svgPos(p.id)
             if (!s) return null
             const selected = selectedPlayerId === p.id
@@ -325,6 +353,8 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                     <ellipse rx={29} ry={29} fill="none" stroke="#ffd43b" strokeWidth={4} pointerEvents="none" data-testid="selected-ring"
                       style={{ filter: 'drop-shadow(0 0 8px #ffd43b)' }} />
                   )}
+                  <path d="M 24 0 L 33 -7 L 33 7 Z" fill="white" opacity={0.9} pointerEvents="none" data-testid="facing-wedge"
+                    transform={`rotate(${(faceOf(p.id, p.team) * 180) / Math.PI})`} />
                   <circle
                     r={20}
                     fill={p.team === 'ours' ? '#2f8cff' : '#e5484d'}
@@ -340,7 +370,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           })}
 
           {holderPos && (
-            <g transform={`translate(${holderPos.svgX + 20}, ${holderPos.svgY + 18})`} pointerEvents="none" data-testid="ball">
+            <g transform={`translate(${holderPos.svgX + Math.cos(holderFace) * BALL_OFFSET * 10}, ${holderPos.svgY + Math.sin(holderFace) * BALL_OFFSET * 10})`} pointerEvents="none" data-testid="ball">
               <circle r={15} fill="none" stroke="#ffd43b" strokeWidth={3} className="ball-pulse" />
               <circle r={10} fill="#fff" stroke="#111" strokeWidth={2.5} />
               <circle r={3.5} fill="#111" />
@@ -349,11 +379,22 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
         </svg>
         <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col items-center gap-2">
           {step && <StepNote key={step.id} badge={step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex} title={step.title} detail={step.narrativeOurs.join(' ')} />}
-          {holderId && (
-            <div data-testid="ball-chip" className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-[rgba(11,16,21,0.88)] px-3 py-1 text-xs font-semibold text-[#e8edf2] shadow-lg backdrop-blur-md">
-              <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />
-              Ball: {labelOf(holderId)}
-            </div>
+          {step && (
+            <RunsPanel
+              key={`runs-${step.id}`}
+              lead={
+                holderId && (
+                  <div data-testid="ball-chip" className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-[rgba(11,16,21,0.88)] px-3 py-1 text-xs font-semibold text-[#e8edf2] shadow-lg backdrop-blur-md">
+                    <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />
+                    Ball: {labelOf(holderId)}
+                  </div>
+                )
+              }
+              moves={step.moves}
+              labelOf={labelOf}
+              onToggle={(id) => toggleMoveHidden(id, currentStepIndex)}
+              onSetAll={(hidden) => setStepMovesHidden(currentStepIndex, hidden)}
+            />
           )}
           {flash && (
             <div key={flash.id} role="status" data-testid="action-flash"

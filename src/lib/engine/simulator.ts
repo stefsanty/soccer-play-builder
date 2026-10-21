@@ -299,7 +299,8 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
     // (ball needs this frame's positions, so it is computed against `frame` before it is pushed)
     frames.push(frame)
     frame.ball = ballAt(t)
-    lastBall = frame.ball
+    // defenders only watch a ball that exists (a play without passes has none)
+    lastBall = frame.ball.holder || frame.ball.flying ? frame.ball : null
     for (const id of ids) {
       const r = st[id].rule
       if (r && r.type === 'mark' && !moved.has(id)) frame.marks.push({ from: id, to: r.attacker })

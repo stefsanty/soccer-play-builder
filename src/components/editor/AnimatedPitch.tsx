@@ -119,7 +119,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
           {/* run arrows */}
           {step.moves.map((m) => {
             const from = timeline.start[m.playerId]
-            if (!from || time < m.startTime || Math.hypot(m.toX - from.x, m.toY - from.y) < 3) return null
+            if (!from || m.hidden || time < m.startTime || Math.hypot(m.toX - from.x, m.toY - from.y) < 3) return null
             const a = pt(from.x, from.y)
             const b = pt(m.toX, m.toY)
             const v = m.via ? pt(m.via[0], m.via[1]) : null
@@ -156,7 +156,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
                   const at = label ? (label.a === 'end' ? cb : ca) : null
                   return (
                     <g key={`opt-${gi}-${pi}`} data-testid="option-line" pointerEvents="none">
-                      <line x1={ca.x} y1={ca.y} x2={cb.x} y2={cb.y} stroke="#4cc9f0" strokeWidth={3} strokeDasharray="1 7" strokeLinecap="round" />
+                      <line x1={ca.x} y1={ca.y} x2={cb.x} y2={cb.y} stroke="#4cc9f0" strokeWidth={3} strokeDasharray="9 7" strokeLinecap="round" opacity={0.7} />
                       {label && at && (
                         <text x={at.x + (label.a === 'end' ? 0 : 26)} y={at.y - 26} textAnchor={label.a === 'end' ? 'middle' : 'start'} fontSize={13} fontWeight={700}
                           fill="#bdeeff" stroke="#0b1015" strokeWidth={3} paintOrder="stroke">
@@ -230,9 +230,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
               const s = pt(fp.x, fp.y)
               return (
                 <g key={p.id} data-testid={`anim-player-${p.id}`} data-team={p.team} transform={`translate(${s.x}, ${s.y})`} pointerEvents="none" opacity={p.isContext ? 0.55 : 1}>
-                  {team === 'ours' && (
-                    <path d="M 24 0 L 33 -7 L 33 7 Z" fill="white" opacity={0.9} transform={`rotate(${(fp.face * 180) / Math.PI})`} data-testid="facing-wedge" />
-                  )}
+                  <path d="M 24 0 L 33 -7 L 33 7 Z" fill="white" opacity={0.9} transform={`rotate(${(fp.face * 180) / Math.PI})`} data-testid="facing-wedge" />
                   <circle r={20} fill={team === 'ours' ? '#2f8cff' : '#e5484d'} stroke="white" strokeWidth={2.5} />
                   <text textAnchor="middle" dy={4} fontSize={12} fill="white" fontWeight={700}>
                     {p.label}
