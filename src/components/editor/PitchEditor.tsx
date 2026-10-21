@@ -9,6 +9,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useEditorStore, type EditorMode } from '@/lib/store/editorStore'
 import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
+import { PitchMarkings } from './PitchMarkings'
+import { AnimatedPitch } from './AnimatedPitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import type { Play } from '@/lib/types/play'
 import { Button } from '@/components/ui/button'
@@ -28,8 +30,6 @@ const MODES: { mode: EditorMode; label: string }[] = [
 ]
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
-const LINE = { fill: 'none', stroke: 'white', strokeOpacity: 0.7, strokeWidth: 2 } as const
-
 /** Player positions as shown at the end of `stepIndex`: initial position, then moves from steps 1..stepIndex (step 0 is setup). */
 function positionsAt(play: Play, stepIndex: number): Map<string, Pos> {
   const map = new Map<string, Pos>()
@@ -38,38 +38,6 @@ function positionsAt(play: Play, stepIndex: number): Map<string, Pos> {
     for (const m of play.steps[i]?.moves ?? []) map.set(m.playerId, { x: m.toX, y: m.toY })
   }
   return map
-}
-
-function PitchMarkings() {
-  const w = PITCH_W * 10
-  const h = PITCH_H * 10
-  const cx = w / 2
-  // Penalty box 40.3 x 16.5m, goal area 18.3 x 5.5m, penalty spot 11m, arc radius 9.15m
-  const arcDx = 55
-  const arcDy = Math.sqrt(91.5 ** 2 - 55 ** 2)
-  const box = (top: boolean) => {
-    const dir = top ? 1 : -1
-    const goalLine = top ? 0 : h
-    const arcY = goalLine + dir * (165 + arcDy)
-    return (
-      <g key={top ? 'top' : 'bottom'}>
-        <rect x={cx - 201.5} y={top ? 0 : h - 165} width={403} height={165} {...LINE} />
-        <rect x={cx - 91.5} y={top ? 0 : h - 55} width={183} height={55} {...LINE} />
-        <circle cx={cx} cy={goalLine + dir * 110} r={2.5} fill="white" fillOpacity={0.7} />
-        <path d={`M ${cx - arcDx} ${arcY} A 91.5 91.5 0 0 ${top ? 0 : 1} ${cx + arcDx} ${arcY}`} {...LINE} />
-      </g>
-    )
-  }
-  return (
-    <g>
-      <rect x={0} y={0} width={w} height={h} {...LINE} />
-      <line x1={0} y1={h / 2} x2={w} y2={h / 2} {...LINE} />
-      <circle cx={cx} cy={h / 2} r={91.5} {...LINE} />
-      <circle cx={cx} cy={h / 2} r={2.5} fill="white" fillOpacity={0.7} />
-      {box(true)}
-      {box(false)}
-    </g>
-  )
 }
 
 export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {}) {
@@ -184,7 +152,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const hint =
     mode === 'pass' ? (pendingFrom ? 'Now click the receiving player' : 'Click the passer, then the receiver')
     : mode === 'run' ? (pendingFrom ? 'Click the pitch to set the run destination' : 'Click a player, then a destination')
-    : mode === 'preview' ? 'Preview mode — editing is paused'
+    : mode === 'preview' ? 'Preview mode — press Play, or pick another mode to edit'
     : 'Drag players to reposition them'
 
   return (
@@ -217,77 +185,81 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
       </div>
       <p className="text-xs text-slate-400" data-testid="editor-hint">{hint}</p>
 
-      <svg
-        ref={svgRef}
-        data-testid="pitch-svg"
-        viewBox="-20 -20 720 1090"
-        className="w-full h-auto max-h-[75vh] mx-auto rounded-lg bg-emerald-700 touch-none select-none"
-        role="img"
-        aria-label="Soccer pitch editor"
-        onPointerDown={onPitchDown}
-      >
-        <defs>
-          <marker id="arrow-pass" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M0 0L10 5L0 10z" fill="white" />
-          </marker>
-          <marker id="arrow-run" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M0 0L10 5L0 10z" fill="#fde047" />
-          </marker>
-        </defs>
-        <PitchMarkings />
+      {mode === 'preview' && play ? (
+        <AnimatedPitch play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep} />
+      ) : (
+        <svg
+          ref={svgRef}
+          data-testid="pitch-svg"
+          viewBox="-20 -20 720 1090"
+          className="w-full h-auto max-h-[75vh] mx-auto rounded-lg bg-emerald-700 touch-none select-none"
+          role="img"
+          aria-label="Soccer pitch editor"
+          onPointerDown={onPitchDown}
+        >
+          <defs>
+            <marker id="arrow-pass" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0L10 5L0 10z" fill="white" />
+            </marker>
+            <marker id="arrow-run" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0L10 5L0 10z" fill="#fde047" />
+            </marker>
+          </defs>
+          <PitchMarkings />
 
-        {prevPositions && step?.moves.map((m) => {
-          const from = prevPositions.get(m.playerId)
-          if (!from) return null
-          const a = mToSvg(from.x, from.y)
-          const b = mToSvg(m.toX, m.toY)
-          return (
-            <line key={`run-${m.playerId}`} x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
-              stroke="#fde047" strokeWidth={3} strokeDasharray="8 6" markerEnd="url(#arrow-run)" data-testid="run-arrow" />
-          )
-        })}
+          {prevPositions && step?.moves.map((m) => {
+            const from = prevPositions.get(m.playerId)
+            if (!from) return null
+            const a = mToSvg(from.x, from.y)
+            const b = mToSvg(m.toX, m.toY)
+            return (
+              <line key={`run-${m.playerId}`} x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
+                stroke="#fde047" strokeWidth={3} strokeDasharray="8 6" markerEnd="url(#arrow-run)" data-testid="run-arrow" />
+            )
+          })}
 
-        {step?.passes.map((pass, i) => {
-          const a = svgPos(pass.from)
-          const b = svgPos(pass.to)
-          if (!a || !b) return null
-          return (
-            <line key={`pass-${i}`} x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
-              stroke="white" strokeWidth={3} markerEnd="url(#arrow-pass)" data-testid="pass-arrow" />
-          )
-        })}
+          {step?.passes.map((pass, i) => {
+            const a = svgPos(pass.from)
+            const b = svgPos(pass.to)
+            if (!a || !b) return null
+            return (
+              <line key={`pass-${i}`} x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
+                stroke="white" strokeWidth={3} markerEnd="url(#arrow-pass)" data-testid="pass-arrow" />
+            )
+          })}
 
-        {play?.players.map((p) => {
-          const s = svgPos(p.id)
-          if (!s) return null
-          const active = selectedPlayerId === p.id || pendingFrom === p.id
-          return (
-            <g
-              key={p.id}
-              data-testid={`player-${p.id}`}
-              data-team={p.team}
-              transform={`translate(${s.svgX}, ${s.svgY})`}
-              onPointerDown={(e) => onPlayerDown(e, p.id)}
-              onPointerMove={onPlayerMove}
-              onPointerUp={onPlayerUp}
-              onPointerCancel={onPlayerUp}
-              className={canEdit ? (mode === 'select' ? 'cursor-grab' : 'cursor-pointer') : ''}
-              style={{ touchAction: 'none' }}
-              opacity={p.isContext ? 0.4 : 1}
-            >
-              <circle
-                r={16}
-                fill={p.team === 'ours' ? '#2563eb' : '#dc2626'}
-                stroke={active ? '#fde047' : 'white'}
-                strokeWidth={active ? 4 : 2}
-              />
-              <text textAnchor="middle" dy={4} fontSize={11} fill="white" fontWeight={700} pointerEvents="none">
-                {p.label}
-              </text>
-            </g>
-          )
-        })}
-      </svg>
+          {play?.players.map((p) => {
+            const s = svgPos(p.id)
+            if (!s) return null
+            const active = selectedPlayerId === p.id || pendingFrom === p.id
+            return (
+              <g
+                key={p.id}
+                data-testid={`player-${p.id}`}
+                data-team={p.team}
+                transform={`translate(${s.svgX}, ${s.svgY})`}
+                onPointerDown={(e) => onPlayerDown(e, p.id)}
+                onPointerMove={onPlayerMove}
+                onPointerUp={onPlayerUp}
+                onPointerCancel={onPlayerUp}
+                className={canEdit ? (mode === 'select' ? 'cursor-grab' : 'cursor-pointer') : ''}
+                style={{ touchAction: 'none' }}
+                opacity={p.isContext ? 0.4 : 1}
+              >
+                <circle
+                  r={16}
+                  fill={p.team === 'ours' ? '#2563eb' : '#dc2626'}
+                  stroke={active ? '#fde047' : 'white'}
+                  strokeWidth={active ? 4 : 2}
+                />
+                <text textAnchor="middle" dy={4} fontSize={11} fill="white" fontWeight={700} pointerEvents="none">
+                  {p.label}
+                </text>
+              </g>
+            )
+          })}
+        </svg>
+      )}
     </div>
   )
 }
