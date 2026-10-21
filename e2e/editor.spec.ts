@@ -61,6 +61,30 @@ test.describe('pitch editor', () => {
     await expect(page.getByTestId('pass-arrow')).toHaveCount(1)
   })
 
+  test('feedback: pass shows a confirmation and moves the ball to the receiver', async ({ page }) => {
+    await expect(page.getByTestId('ball')).toHaveCount(0) // nobody has passed yet
+    await page.getByTestId('mode-pass').click()
+    await page.getByTestId('player-o-LCM').click()
+    await expect(page.getByTestId('pending-ring')).toBeVisible()
+    await page.getByTestId('player-o-LST').click()
+    await expect(page.getByTestId('action-flash')).toContainText('Pass added')
+    await expect(page.getByTestId('ball')).toHaveCount(1)
+    await expect(page.getByTestId('ball-chip')).toContainText('Ball: LST')
+  })
+
+  test('feedback: tapping a player highlights it, tapping the pitch clears it', async ({ page }) => {
+    await page.getByTestId('player-o-LCM').click()
+    await expect(page.getByTestId('selected-ring')).toHaveCount(1)
+    await expect(page.getByTestId('player-o-LCM')).toHaveAttribute('data-selected', 'true')
+    await page.getByTestId('pitch-svg').click({ position: { x: 5, y: 5 } })
+    await expect(page.getByTestId('selected-ring')).toHaveCount(0)
+  })
+
+  test('feedback: adding a step confirms it', async ({ page }) => {
+    await page.getByRole('button', { name: 'Add Step', exact: true }).click()
+    await expect(page.getByTestId('action-flash')).toContainText('added')
+  })
+
   test.describe('preview mode', () => {
     test.beforeEach(async ({ page }) => {
       await page.getByTestId('mode-preview').click()

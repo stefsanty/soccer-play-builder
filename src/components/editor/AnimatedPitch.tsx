@@ -13,6 +13,7 @@ import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
 import { PitchMarkings } from './PitchMarkings'
 import { PitchSurface } from './PitchSurface'
 import { Button } from '@/components/ui/button'
+import { CircleDot } from 'lucide-react'
 
 interface AnimatedPitchProps {
   play: Play
@@ -59,8 +60,22 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
 
   const total = play.steps.length
 
+  // Who has the ball right now: nobody while a pass is in flight, otherwise the player standing on it.
+  const holderLabel = (() => {
+    if (!frame?.ball) return null
+    if (frame.activePass) return 'in flight'
+    const b = frame.ball
+    let best: { label: string; d: number } | null = null
+    for (const p of frame.players) {
+      const d = Math.hypot(p.x - b.x, p.y - b.y)
+      if (!best || d < best.d) best = { label: p.label, d }
+    }
+    return best && best.d < 2 ? best.label : null
+  })()
+
   return (
     <div className="flex w-full flex-col gap-2" data-testid="animated-pitch">
+      <div className="relative">
       <svg
         data-testid="animated-pitch-svg"
         viewBox="-20 -20 720 1090"
@@ -109,12 +124,21 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
           const b = mToSvg(frame.ball.x, frame.ball.y)
           const lift = frame.ball.height ?? 0
           return (
-            <g data-testid="ball">
-              <circle cx={b.svgX} cy={b.svgY} r={7 + lift * 5} fill="#fefce8" stroke="#1e293b" strokeWidth={2} />
+            <g data-testid="ball" transform={`translate(${b.svgX + (frame.activePass ? 0 : 20)}, ${b.svgY + (frame.activePass ? 0 : 18)})`}>
+              <circle r={15 + lift * 5} fill="none" stroke="#ffd43b" strokeWidth={3} className="ball-pulse" />
+              <circle r={10 + lift * 5} fill="#fff" stroke="#111" strokeWidth={2.5} />
+              <circle r={3.5 + lift * 2} fill="#111" />
             </g>
           )
         })()}
       </svg>
+      {holderLabel && (
+        <div data-testid="ball-chip" className="pointer-events-none absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-[rgba(11,16,21,0.88)] px-3 py-1 text-xs font-semibold text-[#e8edf2] shadow-lg backdrop-blur-md">
+          <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />
+          Ball: {holderLabel}
+        </div>
+      )}
+      </div>
 
       {/* Present mode: playback bar replaces the editor toolbar at the bottom of the screen. */}
       {!inline && <div className="h-28" aria-hidden />}

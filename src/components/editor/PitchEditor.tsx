@@ -14,7 +14,9 @@ import { PitchSurface } from './PitchSurface'
 import { AnimatedPitch } from './AnimatedPitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import type { Play } from '@/lib/types/play'
-import { ChevronDown, MousePointer2, MoveUpRight, Pencil, Play as PlayIcon, Zap } from 'lucide-react'
+import { ballHolderAfter } from '@/lib/engine/ballHolder'
+import { haptic } from '@/lib/haptics'
+import { Check, ChevronDown, CircleDot, MousePointer2, MoveUpRight, Pencil, Play as PlayIcon, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 interface PitchEditorProps {
@@ -61,6 +63,14 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null)
   // First click of a pass/run gesture: the source player.
   const [pendingFrom, setPendingFrom] = useState<string | null>(null)
+  // Brief confirmation of the last action; `at` (meters) also pulses a marker on the pitch.
+  const [flash, setFlash] = useState<{ id: number; text: string; at?: Pos } | null>(null)
+  const announce = (text: string, at?: Pos) => setFlash({ id: Date.now(), text, at })
+  useEffect(() => {
+    if (!flash) return
+    const t = setTimeout(() => setFlash(null), 1800)
+    return () => clearTimeout(t)
+  }, [flash])
 
   // Prop play wins; otherwise keep the store's play or build a default 4-4-2.
   useEffect(() => {
@@ -91,25 +101,47 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const step = play?.steps[currentStepIndex]
   const canEdit = mode !== 'preview'
 
+  const labelOf = (id: string) => play?.players.find((p) => p.id === id)?.label ?? id
+
   const commitPosition = (id: string, m: Pos) => {
     if (currentStepIndex === 0) updatePlayerPosition(id, m.x, m.y)
     else movePlayer(id, m.x, m.y, currentStepIndex)
+    haptic(15)
+    announce(currentStepIndex === 0 ? `Moved ${labelOf(id)}` : `Run set for ${labelOf(id)}`, m)
+  }
+
+  const changeMode = (m: EditorMode) => {
+    if (m !== mode) haptic(8)
+    setMode(m)
+  }
+  const goToStep = (i: number) => {
+    if (i !== currentStepIndex) haptic(8)
+    setCurrentStep(i)
+  }
+  const handleAddStep = () => {
+    addStep()
+    haptic(15)
+    announce(`Step ${(play?.steps.length ?? 0)} added`)
   }
 
   const onPlayerDown = (e: React.PointerEvent<SVGGElement>, id: string) => {
     if (!canEdit || !step) return
     e.stopPropagation()
     selectPlayer(id)
+    haptic(8)
     if (mode === 'pass') {
       if (!pendingFrom) setPendingFrom(id)
-      else if (pendingFrom !== id) {
+      else if (pendingFrom === id) setPendingFrom(null) // tap the passer again to cancel
+      else {
         addPass({ from: pendingFrom, to: id, startTime: 0, endTime: step.duration }, currentStepIndex)
         setPendingFrom(null)
+        haptic(15)
+        announce(`Pass added: ${labelOf(pendingFrom)} to ${labelOf(id)}`)
       }
       return
     }
     if (mode === 'run') {
-      setPendingFrom(id)
+      setPendingFrom(pendingFrom === id ? null : id)
       return
     }
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -151,6 +183,9 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     return p ? mToSvg(p.x, p.y) : null
   }
 
+  const holderId = play ? ballHolderAfter(play, currentStepIndex) : null
+  const holderPos = holderId ? svgPos(holderId) : null
+
   const tip =
     mode === 'pass' ? (pendingFrom ? 'Now tap the receiving player' : 'Tap the passer, then the receiver')
     : mode === 'run' ? (pendingFrom ? 'Tap the pitch to set the run destination' : 'Tap a player, then a destination')
@@ -168,7 +203,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           ref={svgRef}
           data-testid="pitch-svg"
           viewBox="-20 -20 720 1090"
-          className="block h-full w-full touch-none select-none"
+          className={`block h-full w-full touch-none select-none ${mode === 'run' && pendingFrom ? 'cursor-crosshair' : ''}`}
           role="img"
           aria-label="Soccer pitch editor"
           onPointerDown={onPitchDown}
@@ -191,7 +226,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             const b = mToSvg(m.toX, m.toY)
             return (
               <line key={`run-${m.playerId}`} x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
-                stroke="#ffd43b" strokeWidth={3} strokeDasharray="8 6" markerEnd="url(#arrow-run)" data-testid="run-arrow" />
+                stroke="#ffd43b" strokeWidth={3} strokeDasharray="8 6" markerEnd="url(#arrow-run)" data-testid="run-arrow" className="arrow-in" />
             )
           })}
 
@@ -201,44 +236,93 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             if (!a || !b) return null
             return (
               <line key={`pass-${i}`} x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
-                stroke="white" strokeWidth={3} markerEnd="url(#arrow-pass)" data-testid="pass-arrow" />
+                stroke="white" strokeWidth={3} markerEnd="url(#arrow-pass)" data-testid="pass-arrow" className="arrow-in" />
             )
           })}
+
+          {flash?.at && (() => {
+            const t = mToSvg(flash.at.x, flash.at.y)
+            return (
+              <ellipse key={flash.id} cx={t.svgX} cy={t.svgY} rx={22} ry={22} fill="none" stroke="#ffd43b" strokeWidth={4}
+                className="landing-pulse" pointerEvents="none" data-testid="action-marker" />
+            )
+          })()}
+
+          {holderPos && (
+            <ellipse cx={holderPos.svgX} cy={holderPos.svgY} rx={29} ry={29} fill="none" stroke="#ffd43b" strokeWidth={3}
+              strokeDasharray="6 5" pointerEvents="none" data-testid="ball-holder-ring" />
+          )}
 
           {play?.players.map((p) => {
             const s = svgPos(p.id)
             if (!s) return null
-            const active = selectedPlayerId === p.id || pendingFrom === p.id
+            const selected = selectedPlayerId === p.id
+            const pending = pendingFrom === p.id
             return (
               <g
                 key={p.id}
                 data-testid={`player-${p.id}`}
                 data-team={p.team}
+                data-selected={selected || undefined}
                 transform={`translate(${s.svgX}, ${s.svgY})`}
                 onPointerDown={(e) => onPlayerDown(e, p.id)}
                 onPointerMove={onPlayerMove}
                 onPointerUp={onPlayerUp}
                 onPointerCancel={onPlayerUp}
-                className={canEdit ? (mode === 'select' ? 'cursor-grab' : 'cursor-pointer') : ''}
+                className={`group ${canEdit ? (mode === 'select' ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer') : ''}`}
                 style={{ touchAction: 'none' }}
                 opacity={p.isContext ? 0.4 : 1}
               >
-                <circle
-                  r={20}
-                  fill={p.team === 'ours' ? '#2f8cff' : '#e5484d'}
-                  stroke={active ? '#ffd43b' : 'white'}
-                  strokeWidth={active ? 4 : 2.5}
-                />
-                <text textAnchor="middle" dy={4} fontSize={12} fill="white" fontWeight={700} pointerEvents="none">
-                  {p.label}
-                </text>
+                {/* oversized invisible hit area: easier to tap on a phone */}
+                <ellipse rx={30} ry={30} fill="transparent" />
+                <g className="origin-center [transform-box:fill-box] transition-transform duration-100 group-hover:scale-110 group-active:scale-95">
+                  <ellipse rx={27} ry={27} fill="none" stroke="white" strokeWidth={2}
+                    className="opacity-0 transition-opacity group-hover:opacity-70" pointerEvents="none" />
+                  {pending && (
+                    <ellipse rx={30} ry={30} fill="none" stroke="#4cc9f0" strokeWidth={4} className="animate-pulse" pointerEvents="none" data-testid="pending-ring" />
+                  )}
+                  {selected && !pending && (
+                    <ellipse rx={29} ry={29} fill="none" stroke="#ffd43b" strokeWidth={4} pointerEvents="none" data-testid="selected-ring"
+                      style={{ filter: 'drop-shadow(0 0 8px #ffd43b)' }} />
+                  )}
+                  <circle
+                    r={20}
+                    fill={p.team === 'ours' ? '#2f8cff' : '#e5484d'}
+                    stroke={selected || pending ? '#ffd43b' : 'white'}
+                    strokeWidth={selected || pending ? 4 : 2.5}
+                  />
+                  <text textAnchor="middle" dy={4} fontSize={12} fill="white" fontWeight={700} pointerEvents="none">
+                    {p.label}
+                  </text>
+                </g>
               </g>
             )
           })}
+
+          {holderPos && (
+            <g transform={`translate(${holderPos.svgX + 20}, ${holderPos.svgY + 18})`} pointerEvents="none" data-testid="ball">
+              <circle r={15} fill="none" stroke="#ffd43b" strokeWidth={3} className="ball-pulse" />
+              <circle r={10} fill="#fff" stroke="#111" strokeWidth={2.5} />
+              <circle r={3.5} fill="#111" />
+            </g>
+          )}
         </svg>
         <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col items-center gap-2">
           {step && <StepNote key={step.id} index={currentStepIndex} title={step.title} detail={step.narrativeOurs.join(' ')} />}
-          {tip && (
+          {holderId && (
+            <div data-testid="ball-chip" className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-[rgba(11,16,21,0.88)] px-3 py-1 text-xs font-semibold text-[#e8edf2] shadow-lg backdrop-blur-md">
+              <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />
+              Ball: {labelOf(holderId)}
+            </div>
+          )}
+          {flash && (
+            <div key={flash.id} role="status" data-testid="action-flash"
+              className="flash-in inline-flex items-center gap-1.5 rounded-full bg-[var(--app-accent)] px-3 py-1.5 text-xs font-bold text-[var(--app-accent-ink)] shadow-lg">
+              <Check className="size-3.5" strokeWidth={3} aria-hidden />
+              {flash.text}
+            </div>
+          )}
+          {tip && !flash && (
             <div role="status" data-testid="editor-hint" className="inline-flex items-center gap-[7px] whitespace-nowrap rounded-full border border-[#14b8a6]/50 bg-[#14b8a6]/15 py-1.5 pl-[9px] pr-3 text-xs font-medium text-[#ccfbf1] shadow-lg backdrop-blur-md">
               <Pencil className="size-[13px] shrink-0 text-[#14b8a6]" aria-hidden />
               {tip}
@@ -261,9 +345,9 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                 aria-label={label}
                 aria-pressed={mode === m}
                 data-testid={`mode-${m}`}
-                onClick={() => setMode(m)}
-                className={`flex h-11 flex-col items-center justify-center gap-0.5 rounded-[10px] text-[10px] font-medium transition-colors ${
-                  mode === m ? 'bg-[#14b8a6] text-[#0f172a]' : 'text-[#cbd5e1] hover:bg-white/5'
+                onClick={() => changeMode(m)}
+                className={`flex h-11 touch-manipulation select-none flex-col items-center justify-center gap-0.5 rounded-[10px] text-[10px] font-medium transition-all duration-100 active:scale-95 ${
+                  mode === m ? 'bg-[#14b8a6] text-[#0f172a] active:bg-[#5eead4]' : 'text-[#cbd5e1] hover:bg-white/5 active:bg-white/15'
                 }`}
               >
                 <Icon className="size-5" aria-hidden />
@@ -280,16 +364,16 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                   data-testid={`step-chip-${i}`}
                   aria-label={`Step ${i}`}
                   aria-current={i === currentStepIndex ? 'step' : undefined}
-                  onClick={() => setCurrentStep(i)}
-                  className={`h-9 min-w-9 shrink-0 rounded-full px-2 text-[13px] font-bold ${
+                  onClick={() => goToStep(i)}
+                  className={`h-9 min-w-9 shrink-0 touch-manipulation select-none rounded-full px-2 text-[13px] font-bold transition-all duration-100 active:scale-90 ${
                     i === currentStepIndex ? 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]' : 'bg-[var(--app-chip)] text-[#e8edf2]'
                   }`}
                 >
                   {i}
                 </button>
               ))}
-              <button type="button" aria-label="Add Step" onClick={addStep}
-                className="h-9 min-w-9 shrink-0 rounded-full border border-[#34455a] px-2 text-lg leading-none text-[var(--app-muted)]">
+              <button type="button" aria-label="Add Step" onClick={handleAddStep}
+                className="h-9 min-w-9 shrink-0 touch-manipulation select-none rounded-full border border-[#34455a] px-2 text-lg leading-none text-[var(--app-muted)] transition-all duration-100 hover:border-[var(--app-accent)] hover:text-[var(--app-accent)] active:scale-90 active:bg-white/10">
                 +
               </button>
             </div>
@@ -310,7 +394,7 @@ function StepNote({ index, title, detail }: { index: number; title: string; deta
       aria-label={`Step ${index} notes: tap to ${open ? 'collapse' : 'expand'}`}
       data-testid="step-note"
       onClick={() => setOpen((o) => !o)}
-      className={`pointer-events-auto flex w-full items-start gap-2.5 border border-white/10 bg-[rgba(11,16,21,0.88)] py-2 pl-[9px] pr-3 text-left text-[13px] font-medium leading-[1.35] text-[#e8edf2] shadow-xl backdrop-blur-md transition-[border-radius] ${
+      className={`pointer-events-auto flex w-full touch-manipulation select-none items-start gap-2.5 border border-white/10 transition-[border-radius,transform] duration-100 active:scale-[0.98] bg-[rgba(11,16,21,0.88)] py-2 pl-[9px] pr-3 text-left text-[13px] font-medium leading-[1.35] text-[#e8edf2] shadow-xl backdrop-blur-md ${
         open ? 'rounded-[14px]' : 'rounded-[20px]'
       }`}
     >

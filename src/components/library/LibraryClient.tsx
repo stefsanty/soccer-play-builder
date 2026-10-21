@@ -51,7 +51,7 @@ export function LibraryClient() {
 
       <Link
         href="/new"
-        className="flex h-[52px] items-center justify-center gap-2 rounded-[14px] bg-[var(--app-accent)] text-[17px] font-bold text-[var(--app-accent-ink)] no-underline"
+        className="flex h-[52px] touch-manipulation items-center justify-center gap-2 rounded-[14px] bg-[var(--app-accent)] text-[17px] font-bold text-[var(--app-accent-ink)] no-underline transition-all duration-100 hover:brightness-110 active:scale-[0.97] active:brightness-125"
       >
         <Plus className="size-5" strokeWidth={2.5} aria-hidden /> New play
       </Link>

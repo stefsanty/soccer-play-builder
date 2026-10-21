@@ -148,3 +148,38 @@
     @apply font-sans;
   }
 }
+/* Editor feedback animations */
+@keyframes ball-pulse {
+  0% { transform: scale(0.8); opacity: 0.9; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+.ball-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ball-pulse 1.4s ease-out infinite;
+}
+@keyframes landing-pulse {
+  0% { transform: scale(0.6); opacity: 1; }
+  100% { transform: scale(2); opacity: 0; }
+}
+.landing-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: landing-pulse 0.7s ease-out forwards;
+}
+@keyframes arrow-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.arrow-in { animation: arrow-in 0.35s ease-out; }
+@keyframes flash-in {
+  0% { transform: translateY(-6px) scale(0.9); opacity: 0; }
+  15% { transform: translateY(0) scale(1); opacity: 1; }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.flash-in { animation: flash-in 1.8s ease-out forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .ball-pulse, .landing-pulse, .arrow-in { animation-duration: 0.01ms; animation-iteration-count: 1; }
+  .flash-in { animation: none; }
+}

@@ -25,7 +25,7 @@ export function PlayGrid({ plays }: PlayGridProps) {
         </div>
         <Link
           href="/new"
-          className="mt-2.5 flex h-12 items-center justify-center rounded-[14px] bg-[var(--app-accent)] px-5 text-base font-bold text-[var(--app-accent-ink)] no-underline"
+          className="mt-2.5 flex h-12 touch-manipulation items-center justify-center rounded-[14px] bg-[var(--app-accent)] px-5 text-base font-bold text-[var(--app-accent-ink)] no-underline transition-all duration-100 hover:brightness-110 active:scale-[0.97]"
         >
           Create your first play
         </Link>

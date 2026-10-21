@@ -7,7 +7,7 @@ import { ChevronLeft, Redo2, Share, Undo2 } from 'lucide-react'
 import { useEditorStore } from '@/lib/store/editorStore'
 import { SaveButton } from '@/components/editor/SaveButton'
 
-const iconBtn = 'flex h-11 w-10 items-center justify-center border-0 bg-transparent'
+const iconBtn = 'flex h-11 w-10 touch-manipulation items-center justify-center border-0 bg-transparent transition-transform duration-100 active:scale-90 disabled:active:scale-100'
 
 export function EditorTopBar() {
   const play = useEditorStore((s) => s.play)
@@ -27,7 +27,7 @@ export function EditorTopBar() {
 
   return (
     <header className="relative z-10 flex h-11 shrink-0 items-center gap-0.5 border-b border-[var(--app-line)] bg-[var(--bg-base)] px-2 text-[#e8edf2]">
-      <Link href="/" aria-label="Back" className="flex size-11 items-center justify-center text-[var(--app-accent)]">
+      <Link href="/" aria-label="Back" className="flex size-11 touch-manipulation items-center justify-center text-[var(--app-accent)] transition-transform duration-100 active:scale-90">
         <ChevronLeft className="size-[26px]" strokeWidth={2.4} aria-hidden />
       </Link>
       <input

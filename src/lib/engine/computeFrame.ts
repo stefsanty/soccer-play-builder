@@ -1,4 +1,5 @@
 import type { PassAnimation, Play, PlayerMove } from '@/lib/types/play'
+import { ballHolderBefore } from './ballHolder'
 import { passFlight, tweenPosition } from './physics'
 
 type Pt = [number, number]
@@ -66,14 +67,7 @@ export function computeFrame(play: Play | null | undefined, stepIndex: number, t
   }
 
   // Ball: held by the last receiver (initially the first passer anywhere in the play).
-  let holder: string | null = null
-  for (const s of play.steps) {
-    if (s.passes.length > 0) { holder = s.passes[0].from; break }
-  }
-  for (let i = 0; i < idx; i++) {
-    const last = play.steps[i].passes.at(-1)
-    if (last) holder = last.to
-  }
+  let holder: string | null = ballHolderBefore(play, idx)
 
   let ball: FrameState['ball'] = null
   let activePass: FrameState['activePass'] = null

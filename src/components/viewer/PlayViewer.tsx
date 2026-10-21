@@ -69,7 +69,7 @@ export function PlayViewer({ play }: { play: Play }) {
                     type="button"
                     onClick={() => setStepIndex(i)}
                     aria-current={current ? 'step' : undefined}
-                    className={`flex w-full items-center gap-3 rounded-[10px] border py-2.5 pr-3 text-left text-sm text-[#e8edf2] ${
+                    className={`flex w-full touch-manipulation items-center gap-3 rounded-[10px] border py-2.5 pr-3 text-left text-sm text-[#e8edf2] transition-all duration-100 hover:brightness-125 active:scale-[0.98] ${
                       branch ? 'border-dashed border-[#4cc9f0] pl-9' : current ? 'border-[#4cc9f0] pl-3' : 'border-transparent pl-3'
                     } ${current ? 'bg-[#17303d]' : 'bg-[var(--app-card)]'}`}
                   >

@@ -62,7 +62,7 @@ export function SaveButton() {
         aria-label={label}
         disabled={status === 'saving'}
         onClick={onSave}
-        className={`flex h-11 w-10 items-center justify-center ${status === 'error' ? 'text-[#ff6b6b]' : 'text-[#14b8a6]'}`}
+        className={`flex h-11 w-10 touch-manipulation items-center justify-center transition-transform duration-100 active:scale-90 ${status === 'error' ? 'text-[#ff6b6b]' : 'text-[#14b8a6]'}`}
       >
         <Icon className={`size-[22px] ${status === 'saving' ? 'animate-spin' : ''}`} strokeWidth={2.6} aria-hidden />
       </button>
