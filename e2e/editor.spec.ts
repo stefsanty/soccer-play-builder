@@ -169,6 +169,53 @@ test.describe('pitch editor', () => {
       await expect(page.getByTestId('pitch-svg')).toBeVisible()
     })
 
+    test('is the Edit layout with a playback bar: same header and same pitch placement', async ({ page }) => {
+      await page.getByTestId('view-edit').click()
+      const edit = (await page.getByTestId('player-o-LCM').locator('circle').boundingBox())!
+      const editTitle = (await page.getByTestId('play-title').boundingBox())!
+      const editSteps = (await page.getByTestId('step-bar').boundingBox())!
+      await page.getByTestId('view-play').click()
+      const play = (await page.getByTestId('anim-player-o-LCM').locator('circle').boundingBox())!
+      const playTitle = (await page.getByTestId('play-title').boundingBox())!
+      const playSteps = (await page.getByTestId('step-bar').boundingBox())!
+      expect(Math.abs(play.x - edit.x)).toBeLessThan(1)
+      expect(Math.abs(play.y - edit.y)).toBeLessThan(1)
+      expect(Math.abs(play.width - edit.width)).toBeLessThan(1)
+      expect(playTitle).toEqual(editTitle)
+      expect(playSteps).toEqual(editSteps) // the step strip sits in the same slot
+    })
+
+    test('playback bar: Restart, Prev, Play/Pause, Next, speed and step bubbles; no edit toolbar', async ({ page }) => {
+      const bar = page.getByRole('group', { name: 'Playback controls' })
+      for (const name of ['Restart', 'Previous step', 'Next step']) {
+        await expect(bar.getByRole('button', { name, exact: true })).toBeVisible()
+      }
+      await expect(page.getByTestId('play-toggle')).toBeVisible()
+      await expect(page.getByTestId('speed')).toBeVisible()
+      await expect(page.getByTestId('anim-step-chip-0')).toHaveAttribute('aria-current', 'step')
+      await expect(page.getByRole('toolbar')).toHaveCount(0)
+    })
+
+    test('Prev/Next and step bubbles change the step', async ({ page }) => {
+      await page.getByTestId('view-edit').click()
+      await page.getByRole('button', { name: 'Add Step', exact: true }).click()
+      await page.getByTestId('view-play').click()
+      await expect(page.getByTestId('anim-step-indicator')).toContainText('Step 2 of 2')
+      await page.getByRole('button', { name: 'Previous step' }).click()
+      await expect(page.getByTestId('anim-step-indicator')).toContainText('Step 1 of 2')
+      await page.getByRole('button', { name: 'Next step' }).click()
+      await expect(page.getByTestId('anim-step-indicator')).toContainText('Step 2 of 2')
+      await page.getByTestId('anim-step-chip-0').click()
+      await expect(page.getByTestId('anim-step-indicator')).toContainText('Step 1 of 2')
+    })
+
+    test('clicking players does nothing', async ({ page }) => {
+      await page.getByTestId('anim-player-o-LCM').click({ force: true })
+      await expect(page.getByTestId('selected-ring')).toHaveCount(0)
+      await expect(page.getByTestId('player-toolbar')).toHaveCount(0)
+      await expect(page.getByTestId('anim-player-o-LCM')).not.toHaveAttribute('data-selected', /.*/)
+    })
+
     test('speed control cycles 1x → 1.5x → 2x → 0.5x', async ({ page }) => {
       const speed = page.getByTestId('speed')
       await expect(speed).toContainText('1x')

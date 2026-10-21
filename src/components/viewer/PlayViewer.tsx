@@ -52,7 +52,7 @@ export function PlayViewer({ play }: { play: Play }) {
       <div className="mx-auto flex w-full max-w-[1280px] flex-col gap-6 p-4 sm:flex-row sm:flex-wrap sm:p-6">
         <section className="flex min-w-0 flex-col gap-3 sm:flex-[999_1_560px]">
           {step && <div className="text-[17px] font-semibold leading-[1.3]">{step.title}</div>}
-          <AnimatedPitch play={play} stepIndex={stepIndex} onStepChange={setStepIndex} inline />
+          <AnimatedPitch play={play} stepIndex={stepIndex} onStepChange={setStepIndex} />
           {detail && <div className="text-[15px] leading-[1.3]">{detail}</div>}
           <div className="text-[13px] text-[var(--app-muted)]">Tap a step to play it.</div>
         </section>
