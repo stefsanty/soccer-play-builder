@@ -8,6 +8,7 @@ import { useEditorStore } from '@/lib/store/editorStore'
 import { createPlay, updatePlay } from '@/lib/api/plays'
 import type { PlayInsert } from '@/lib/types/play'
 import { isSupabaseConfigured } from '@/lib/supabase/config'
+import { DbBanner } from '@/components/layout/DbBanner'
 
 type Status = 'idle' | 'saving' | 'saved' | 'error'
 
@@ -18,11 +19,22 @@ export function SaveButton() {
   const [savedId, setSavedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const [showDbNotice, setShowDbNotice] = useState(false)
+
   if (!isSupabaseConfigured()) {
+    // The banner is absolutely positioned under the (relative) top bar.
     return (
-      <Button size="sm" variant="outline" disabled data-testid="save-button">
-        Save (no DB)
-      </Button>
+      <>
+        <Button size="sm" data-testid="save-button" className="bg-[#14b8a6] text-[#0f172a] hover:bg-[#0d9488]"
+          onClick={() => setShowDbNotice(true)}>
+          Save
+        </Button>
+        {showDbNotice && (
+          <div className="absolute inset-x-0 top-full p-2">
+            <DbBanner />
+          </div>
+        )}
+      </>
     )
   }
 
@@ -59,6 +71,7 @@ export function SaveButton() {
         disabled={!play || status === 'saving'}
         onClick={onSave}
         data-testid="save-button"
+        className={status === 'error' ? '' : 'bg-[#14b8a6] text-[#0f172a] hover:bg-[#0d9488]'}
       >
         {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved ✓' : status === 'error' ? 'Retry save' : 'Save'}
       </Button>

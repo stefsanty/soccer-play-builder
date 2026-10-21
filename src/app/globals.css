@@ -85,9 +85,16 @@
   --app-bg: #0f172a;
   --app-card: #1e293b;
   --app-accent: #14b8a6;
+  --bg-base: #0f172a;
+  --bg-card: #1e293b;
+  --bg-toolbar: #111827;
+  --accent-hover: #0d9488;
   --pitch: #16a34a;
+  --pitch-lines: rgba(255, 255, 255, 0.7);
   --team-ours: #0ea5e9;
+  --team-ours-stroke: #0369a1;
   --team-opp: #ef4444;
+  --team-opp-stroke: #b91c1c;
 }
 
 .dark {

@@ -4,7 +4,7 @@ test.describe('home page', () => {
   test('loads', async ({ page }) => {
     const res = await page.goto('/')
     expect(res?.ok()).toBe(true)
-    await expect(page.getByRole('heading', { name: 'Soccer Play Builder' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Plays' })).toBeVisible()
   })
 
   test('has navigation links', async ({ page }) => {

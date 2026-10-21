@@ -8,7 +8,7 @@ export function DbBanner() {
     <div
       role="status"
       data-testid="db-banner"
-      className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"
+      className="rounded-md border border-amber-500/40 bg-[#1e293b] px-3 shadow-lg py-2 text-sm text-amber-200"
     >
       Database not configured — plays won&apos;t be saved.
     </div>

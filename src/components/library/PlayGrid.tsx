@@ -15,7 +15,7 @@ export function PlayGrid({ plays }: PlayGridProps) {
     )
   }
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="flex flex-col gap-3">
       {plays.map((play) => (
         <PlayCard key={play.id} play={play} />
       ))}

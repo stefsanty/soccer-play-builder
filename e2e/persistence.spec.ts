@@ -8,12 +8,11 @@ test.describe('save / library', () => {
     const save = page.getByTestId('save-button')
     await expect(save).toBeVisible()
 
+    await expect(page.getByTestId('db-banner')).toHaveCount(0) // never shown on load
+    await save.click()
     if (await page.getByTestId('db-banner').count()) {
-      await expect(save).toBeDisabled()
-      await expect(save).toHaveText('Save (no DB)')
       await expect(page.getByTestId('db-banner')).toContainText(/Database not configured/)
     } else {
-      await save.click()
       await expect(save).toHaveText(/Saved|Retry save/)
     }
     // Editor stays usable either way.

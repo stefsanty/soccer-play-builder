@@ -13,7 +13,8 @@ import { PitchMarkings } from './PitchMarkings'
 import { AnimatedPitch } from './AnimatedPitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import type { Play } from '@/lib/types/play'
-import { Button } from '@/components/ui/button'
+import { ChevronLeft, ChevronRight, MousePointer2, MoveUpRight, Play as PlayIcon, Plus, Zap } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 interface PitchEditorProps {
   play?: Play
@@ -22,11 +23,11 @@ interface PitchEditorProps {
 
 type Pos = { x: number; y: number }
 
-const MODES: { mode: EditorMode; label: string }[] = [
-  { mode: 'select', label: 'Select' },
-  { mode: 'pass', label: 'Pass' },
-  { mode: 'run', label: 'Run' },
-  { mode: 'preview', label: 'Preview' },
+const MODES: { mode: EditorMode; label: string; Icon: LucideIcon }[] = [
+  { mode: 'select', label: 'Select', Icon: MousePointer2 },
+  { mode: 'pass', label: 'Pass', Icon: MoveUpRight },
+  { mode: 'run', label: 'Run', Icon: Zap },
+  { mode: 'preview', label: 'Preview', Icon: PlayIcon },
 ]
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
@@ -149,24 +150,19 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     return p ? mToSvg(p.x, p.y) : null
   }
 
-  const hint =
-    mode === 'pass' ? (pendingFrom ? 'Now click the receiving player' : 'Click the passer, then the receiver')
-    : mode === 'run' ? (pendingFrom ? 'Click the pitch to set the run destination' : 'Click a player, then a destination')
-    : mode === 'preview' ? 'Present mode — press Play, or Edit to go back'
-    : 'Drag players to reposition them'
-
   return (
-    <div className="flex flex-col gap-2 w-full">
-      <p className="text-xs text-slate-400" data-testid="editor-hint">{hint}</p>
-
+    <div className="flex min-h-0 w-full flex-1 flex-col">
       {mode === 'preview' && play ? (
-        <AnimatedPitch play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep} onExit={() => setMode('select')} />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <AnimatedPitch play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep} onExit={() => setMode('select')} />
+        </div>
       ) : (
+        <div className="min-h-0 flex-1 bg-[#16a34a]">
         <svg
           ref={svgRef}
           data-testid="pitch-svg"
           viewBox="-20 -20 720 1090"
-          className="w-full h-auto max-h-[75vh] mx-auto rounded-lg bg-[#16a34a] touch-none select-none"
+          className="block h-full w-full touch-none select-none"
           role="img"
           aria-label="Soccer pitch editor"
           onPointerDown={onPitchDown}
@@ -221,53 +217,66 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                 opacity={p.isContext ? 0.4 : 1}
               >
                 <circle
-                  r={16}
+                  r={24}
                   fill={p.team === 'ours' ? '#0ea5e9' : '#ef4444'}
-                  stroke={active ? '#fde047' : 'white'}
-                  strokeWidth={active ? 4 : 2}
+                  stroke={active ? '#fde047' : p.team === 'ours' ? '#0369a1' : '#b91c1c'}
+                  strokeWidth={active ? 5 : 3}
                 />
-                <text textAnchor="middle" dy={4} fontSize={11} fill="white" fontWeight={700} pointerEvents="none">
+                <text textAnchor="middle" dy={6} fontSize={17} fill="white" fontWeight={700} pointerEvents="none">
                   {p.label}
                 </text>
               </g>
             )
           })}
         </svg>
+        </div>
       )}
       {mode !== 'preview' && (
-        <>
-          <div className="h-28" aria-hidden />
-          <div
-            className="fixed bottom-0 left-1/2 z-20 flex w-full max-w-[390px] -translate-x-1/2 flex-col gap-2 border-t border-slate-800 bg-[var(--app-bg)]/95 p-3 backdrop-blur"
-            role="toolbar"
-            aria-label="Pitch editor toolbar"
-          >
-            <div className="grid grid-cols-4 gap-1">
-              {MODES.map((m) => (
-                <Button
-                  key={m.mode}
-                  size="sm"
-                  variant={mode === m.mode ? 'default' : 'secondary'}
-                  aria-pressed={mode === m.mode}
-                  data-testid={`mode-${m.mode}`}
-                  onClick={() => setMode(m.mode)}
-                >
-                  {m.label}
-                </Button>
-              ))}
-            </div>
-            <div className="flex items-center justify-between gap-1">
-              <Button size="sm" variant="ghost" aria-label="Prev Step" disabled={currentStepIndex <= 0}
-                onClick={() => setCurrentStep(currentStepIndex - 1)}>◀</Button>
-              <span data-testid="step-counter" className="px-2 text-sm tabular-nums text-slate-300" aria-live="polite">
-                Step {currentStepIndex + 1} of {play?.steps.length ?? 1}
-              </span>
-              <Button size="sm" variant="ghost" aria-label="Next Step" disabled={!play || currentStepIndex >= play.steps.length - 1}
-                onClick={() => setCurrentStep(currentStepIndex + 1)}>▶</Button>
-              <Button size="sm" variant="outline" aria-label="Add Step" onClick={addStep}>+ Step</Button>
-            </div>
+        <div
+          className="shrink-0 border-t border-slate-800 bg-[var(--bg-toolbar)] px-2 pb-2 pt-1.5"
+          role="toolbar"
+          aria-label="Pitch editor toolbar"
+        >
+          <div className="grid grid-cols-4 gap-1">
+            {MODES.map(({ mode: m, label, Icon }) => (
+              <button
+                key={m}
+                type="button"
+                aria-label={label}
+                aria-pressed={mode === m}
+                data-testid={`mode-${m}`}
+                onClick={() => setMode(m)}
+                className={`flex h-11 flex-col items-center justify-center gap-0.5 rounded-lg text-[10px] font-medium transition-colors ${
+                  mode === m ? 'bg-[#14b8a6] text-[#0f172a]' : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <Icon className="size-5" aria-hidden />
+                {label}
+              </button>
+            ))}
           </div>
-        </>
+          <div className="mt-1 flex items-center justify-between border-t border-slate-800 pt-1.5">
+            <div className="flex items-center">
+              <button type="button" aria-label="Prev Step" disabled={currentStepIndex <= 0}
+                onClick={() => setCurrentStep(currentStepIndex - 1)}
+                className="flex size-8 items-center justify-center rounded-md text-slate-300 hover:bg-slate-800 disabled:opacity-30">
+                <ChevronLeft className="size-5" aria-hidden />
+              </button>
+              <span data-testid="step-counter" className="px-2 text-sm tabular-nums text-slate-300" aria-live="polite">
+                Step {currentStepIndex + 1}/{play?.steps.length ?? 1}
+              </span>
+              <button type="button" aria-label="Next Step" disabled={!play || currentStepIndex >= play.steps.length - 1}
+                onClick={() => setCurrentStep(currentStepIndex + 1)}
+                className="flex size-8 items-center justify-center rounded-md text-slate-300 hover:bg-slate-800 disabled:opacity-30">
+                <ChevronRight className="size-5" aria-hidden />
+              </button>
+            </div>
+            <button type="button" aria-label="Add Step" onClick={addStep}
+              className="flex h-8 items-center gap-1 rounded-md border border-slate-600 px-2.5 text-xs font-medium text-slate-200 hover:bg-slate-800">
+              <Plus className="size-3.5" aria-hidden /> Step
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
