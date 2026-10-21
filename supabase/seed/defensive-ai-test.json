@@ -348,6 +348,87 @@
           "offsideLine": true
         }
       }
+    },
+    {
+      "id": "ai-step-4",
+      "index": 4,
+      "title": "Ball at the back: ST drops, LW runs into the striker zone",
+      "duration": 8,
+      "narrativeOurs": [
+        "ST drops to midfield to create space. LW makes a diagonal run into the striker zone.",
+        "oCAM follows ST into midfield (follow rule with zone boundary).",
+        "Watch: does the OPP defensive shape adapt? Does a new player pick up LW in the striker zone?",
+        "When ball is recycled at back, do the OPP lines stay high enough or do they drop unnecessarily?"
+      ],
+      "narrativeOpp": [],
+      "moves": [
+        {
+          "playerId": "ST",
+          "toX": 34,
+          "toY": 55,
+          "startTime": 0.3,
+          "endTime": 3.3
+        },
+        {
+          "playerId": "LW",
+          "toX": 28,
+          "toY": 78,
+          "startTime": 0.5,
+          "endTime": 3.5
+        },
+        {
+          "playerId": "CM",
+          "toX": 34,
+          "toY": 38,
+          "startTime": 0.8,
+          "endTime": 3.8
+        }
+      ],
+      "passes": [
+        {
+          "from": "oRCB",
+          "to": "oGK",
+          "startTime": 0.5,
+          "endTime": 1.6
+        },
+        {
+          "from": "oGK",
+          "to": "oLCB",
+          "startTime": 2.2,
+          "endTime": 3.2
+        }
+      ],
+      "defenderRules": {
+        "oCAM": [
+          {
+            "type": "follow",
+            "att": "ST",
+            "zone": [
+              34,
+              62
+            ],
+            "bounds": {
+              "kind": "rect",
+              "x0": 18,
+              "y0": 48,
+              "x1": 50,
+              "y1": 75
+            },
+            "delay": 0.3,
+            "gap": 2.5,
+            "w": 0.85,
+            "handoff": "auto"
+          }
+        ]
+      },
+      "faceTargets": [],
+      "ai": {
+        "opp": {
+          "on": true,
+          "intensity": "mid",
+          "offsideLine": true
+        }
+      }
     }
   ]
 }

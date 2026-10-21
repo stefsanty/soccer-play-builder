@@ -1,7 +1,8 @@
 // Follow rule helpers: bounds geometry, the follow target, and the exit -> handoff logic.
-// A follower shadows an attacker inside `bounds`. Once the attacker has been outside the bounds
-// (plus a 2 m exit margin) for 0.3 s the follower reverts to its zone, a nearby defender may take
-// the attacker over, and the original follower may not take anyone over for 1 s.
+// A follower shadows an attacker inside `bounds` (while the attacker is still outside, the follower waits at
+// the nearest edge). Only an attacker who has ENTERED the bounds can leave them: once he has been outside the
+// bounds (plus a 2 m exit margin) for 0.3 s the follower reverts to its zone, a nearby defender may take the
+// attacker over, and the original follower may not take anyone over for 1 s.
 
 import type { Bounds, FollowRule } from '@/lib/types/play'
 
@@ -12,10 +13,12 @@ export const EXIT_TIME = 0.3 // s the attacker must stay out
 export const HANDOFF_COOLDOWN = 1 // s the original follower is locked out afterwards
 
 export interface FollowTrack {
+  /** Has the attacker been inside the bounds since tracking began? An exit only counts after an entry. */
+  entered: boolean
   outsideSince: number | null
   cooldownUntil: number
 }
-export const newFollowTrack = (): FollowTrack => ({ outsideSince: null, cooldownUntil: -Infinity })
+export const newFollowTrack = (): FollowTrack => ({ entered: false, outsideSince: null, cooldownUntil: -Infinity })
 
 /** Is `p` inside `b`, grown by `margin` metres? */
 export function contains(b: Bounds, p: XY, margin = 0): boolean {
@@ -59,6 +62,12 @@ export function trackExit(track: FollowTrack, rule: FollowRule, att: XY, t: numb
     track.outsideSince = null
     return false
   }
+  if (contains(rule.bounds, att)) track.entered = true
+  if (!track.entered) {
+    // not in the area yet (e.g. a striker dropping in from the box): nothing to hand over
+    track.outsideSince = null
+    return false
+  }
   if (contains(rule.bounds, att, EXIT_MARGIN)) {
     track.outsideSince = null
     return false
@@ -66,6 +75,7 @@ export function trackExit(track: FollowTrack, rule: FollowRule, att: XY, t: numb
   if (track.outsideSince === null) track.outsideSince = t
   if (t - track.outsideSince >= EXIT_TIME - 1e-6) {
     track.outsideSince = null
+    track.entered = false
     track.cooldownUntil = t + HANDOFF_COOLDOWN
     return true
   }

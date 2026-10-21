@@ -29,8 +29,8 @@ test.describe('Defensive AI test: 4 scenarios', () => {
     await page.getByTestId('play-toggle').click() // it auto-starts: pause
   }
 
-  test('has four steps and the opponent AI line is drawn', async ({ page }) => {
-    await expect(page.locator('[data-testid^="anim-step-chip-"]')).toHaveCount(4)
+  test('has five steps and the opponent AI line is drawn', async ({ page }) => {
+    await expect(page.locator('[data-testid^="anim-step-chip-"]')).toHaveCount(5)
     await expect(page.getByTestId('ai-line-opp')).toHaveCount(1)
     await expect(page.getByTestId('ai-line-ours')).toHaveCount(0) // only the opponent has the AI on
   })
@@ -58,5 +58,20 @@ test.describe('Defensive AI test: 4 scenarios', () => {
     const before = await dist()
     await seek(page, 1000)
     expect(await dist()).toBeLessThan(before - 20)
+  })
+
+  test('step 5: OPP recycle the ball at the back, the block stays high and oCAM follows ST into midfield', async ({ page }) => {
+    await pauseOnStep(page, 4)
+    await seek(page, 0)
+    const start = ((await centreY(page, 'oLCB')) + (await centreY(page, 'oRCB'))) / 2
+    await seek(page, 1000)
+    const end = ((await centreY(page, 'oLCB')) + (await centreY(page, 'oRCB'))) / 2
+    // screen y grows downwards: the line moved UP the pitch (towards halfway), it did not collapse into their box
+    expect(end).toBeGreaterThan(start + 40)
+    await expect(page.getByTestId('ball-chip')).toContainText('Ball: oLCB')
+    // oCAM is on ST in midfield
+    const a = (await page.getByTestId('anim-player-oCAM').locator('circle').boundingBox())!
+    const b = (await page.getByTestId('anim-player-ST').locator('circle').boundingBox())!
+    expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeLessThan(70)
   })
 })

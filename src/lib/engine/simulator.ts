@@ -18,7 +18,7 @@
 import type { AiConfig, AiRole, DefenderRule, FaceTarget, PassAnimation, Play, PlayStep, PlayerMove } from '@/lib/types/play'
 import { trapezoid } from '@/lib/engine/physics'
 import { baseStepIndex, ballHolderBefore } from '@/lib/engine/ballHolder'
-import { computeAiTargets, type AiWorld, type Team } from '@/lib/engine/ai'
+import { computeAiTargets, type AiWorld, type Duty, type Team } from '@/lib/engine/ai'
 import { followTarget, newFollowTrack, pickHandoff, trackExit, type FollowTrack, type HandoffCandidate } from '@/lib/engine/follow'
 
 type Pt = [number, number]
@@ -29,6 +29,8 @@ export const AMAX = 5.5 // m/s^2, defender acceleration limit
 export const BALL_OFFSET = 1.35 // m, ball sits this far from the holder along their facing
 export const AI_REFRESH = 0.25 // s between AI re-evaluations
 export const AI_REACTION = 0.4 // s before the AI first engages in a step
+/** Chase brakes with this share of the acceleration limit, so a defender stops on his target instead of running past it. */
+const BRAKE = 0.85
 /** Chase gain per rule type: desired speed = min(VMAX, distance * gain). */
 export const GAINS = { zone: 2.5, mark: 2.2, follow: 2.2, press: 4.0, ai: 2.2 } as const
 const FACE_RATE = 7 // rad/s
@@ -61,6 +63,8 @@ export interface BallFrame {
   /** 0..1 arc height for lobs. */
   lift: number
   holder: string | null
+  /** The holder, or the receiver of the pass in flight (null when there is no ball). */
+  target: string | null
 }
 
 export interface SimFrame {
@@ -71,15 +75,24 @@ export interface SimFrame {
   marks: { from: string; to: string }[]
 }
 
-export interface SimEvent {
-  t: number
-  type: 'handoff'
-  /** The follower that gave the attacker up. */
-  from: string
-  /** Who took over (null = nobody). */
-  to: string | null
-  attacker: string
-}
+export type SimEvent =
+  | {
+      t: number
+      type: 'handoff'
+      /** The follower that gave the attacker up. */
+      from: string
+      /** Who took over (null = nobody). */
+      to: string | null
+      attacker: string
+    }
+  | {
+      t: number
+      type: 'presser'
+      team: Team
+      /** The AI presser before / after (null = nobody pressing). */
+      from: string | null
+      to: string | null
+    }
 
 export interface StepTimeline {
   stepIndex: number
@@ -247,13 +260,13 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
       const origin = passOriginOf(p)
       if (t < p.endTime) {
         const f = flight(p, t, origin)
-        return { x: f.x, y: f.y, flying: true, lift: f.lift, holder: null }
+        return { x: f.x, y: f.y, flying: true, lift: f.lift, holder: null, target: p.to }
       }
       h = p.to
     }
-    if (!h || !st[h]) return { x: 0, y: 0, flying: false, lift: 0, holder: null }
+    if (!h || !st[h]) return { x: 0, y: 0, flying: false, lift: 0, holder: null, target: null }
     const q = bp(h, t)
-    return { x: q[0], y: q[1], flying: false, lift: 0, holder: h }
+    return { x: q[0], y: q[1], flying: false, lift: 0, holder: h, target: h }
   }
   const origins = new Map<PassAnimation, Pt>()
   const passOriginOf = (p: PassAnimation): Pt => {
@@ -269,8 +282,19 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
   const posOf = (id: string): Pt | null => (st[id] ? [st[id].x, st[id].y] : null)
   const isKeeper = (id: string) => /gk/i.test(labels[id] ?? '')
 
+  const handoffLocked = new Set<string>() // handoff receivers: the AI leaves them on their new job
+  const lastPresser: Partial<Record<Team, string | null>> = {}
+  /** The marking / pressing / following job a player's current rule gives him. */
+  const dutyOf = (id: string): Duty | null => {
+    const r = st[id].rule
+    if (!r) return null
+    if (r.type === 'press' || r.type === 'follow') return { type: r.type, att: r.att }
+    if (r.type === 'mark') return { type: 'mark', att: r.attacker }
+    return null
+  }
+
   /** Re-evaluate the defensive AI for `team` and hand each driven player its new target. */
-  const refreshAi = (team: Team) => {
+  const refreshAi = (team: Team, t: number) => {
     const cfg = aiConfig(team)
     // authored ai(delay, role) rules: those players are AI-driven even when the team switch is off
     const forced: Record<string, AiRole> = {}
@@ -279,16 +303,32 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
       if (st[id].team === team && authoredIds.has(id) && r?.type === 'ai') forced[id] = r.role ?? 'auto'
     }
     if (!cfg?.on && Object.keys(forced).length === 0) return
-    const ball = lastBall && (lastBall.holder || lastBall.flying) ? { x: lastBall.x, y: lastBall.y } : null
+    const hasBall = lastBall && (lastBall.holder || lastBall.flying)
+    // The block reacts to where the ball is going: while a pass is in flight the AI plays the receiver as the ball,
+    // so the line is already dropping (and the receiver being closed down) when the ball arrives.
+    const receiver = lastBall?.flying && lastBall.target ? st[lastBall.target] : null
     const world: AiWorld = {
-      ball,
+      ball: hasBall ? (receiver ? { x: receiver.x, y: receiver.y } : { x: lastBall!.x, y: lastBall!.y }) : null,
       memory,
-      players: ids.map((id) => ({ id, team: st[id].team, label: labels[id] ?? id, x: st[id].x, y: st[id].y, home: homes[id] ?? [st[id].x, st[id].y] })),
+      owner: hasBall && lastBall!.target ? (st[lastBall!.target]?.team ?? null) : null,
+      focus: hasBall ? lastBall!.target : null,
+      t,
+      locked: handoffLocked,
+      players: ids.map((id) => ({
+        id, team: st[id].team, label: labels[id] ?? id, x: st[id].x, y: st[id].y,
+        home: homes[id] ?? [st[id].x, st[id].y], duty: dutyOf(id),
+      })),
     }
     const targets = computeAiTargets(world, team, step, cfg ?? { on: false }, forced)
+    let presser: string | null = null
     for (const [id, tg] of Object.entries(targets)) {
       if (tweens.has(id)) continue
+      if (tg.role === 'presser') presser = id
       st[id].rule = { type: 'ai', role: forced[id] ?? tg.role, x: tg.x, y: tg.y, gain: tg.gain, delay: 0 }
+    }
+    if (Object.keys(targets).length > 0 && (lastPresser[team] ?? null) !== presser) {
+      events.push({ t, type: 'presser', team, from: lastPresser[team] ?? null, to: presser })
+      lastPresser[team] = presser
     }
   }
 
@@ -315,6 +355,7 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
       if (to) {
         const c = st[to]
         const cr = c.rule
+        handoffLocked.add(to)
         c.fol = newFollowTrack()
         if (cr?.type === 'follow') c.rule = { ...cr, att: rule.att, delay: 0 }
         else {
@@ -350,7 +391,7 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
     }
     for (const team of teams) {
       if (t >= nextRefresh[team] - 1e-9) {
-        refreshAi(team)
+        refreshAi(team, t)
         nextRefresh[team] = t + AI_REFRESH
       }
     }
@@ -378,7 +419,7 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
       const dx = target[0] - p.x
       const dy = target[1] - p.y
       const d = Math.hypot(dx, dy)
-      const speed = Math.min(VMAX, d * gain)
+      const speed = Math.min(VMAX, d * gain, Math.sqrt(2 * AMAX * BRAKE * d)) // brake early enough to stop on the target
       const wx = d > 1e-6 ? (dx / d) * speed : 0
       const wy = d > 1e-6 ? (dy / d) * speed : 0
       let ax = wx - p.vx
@@ -436,7 +477,7 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
     // 5. record
     const players: SimFrame['players'] = {}
     for (const id of ids) players[id] = { x: st[id].x, y: st[id].y, face: st[id].face }
-    const frame: SimFrame = { t, players, ball: { x: 0, y: 0, flying: false, lift: 0, holder: null }, marks: [] }
+    const frame: SimFrame = { t, players, ball: { x: 0, y: 0, flying: false, lift: 0, holder: null, target: null }, marks: [] }
     // (ball needs this frame's positions, so it is computed against `frame` before it is pushed)
     frames.push(frame)
     frame.ball = ballAt(t)

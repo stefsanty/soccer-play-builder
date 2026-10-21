@@ -251,16 +251,51 @@ describe('follow: exit tracking', () => {
     const tr = newFollowTrack()
     const out: [number, number] = [40 + EXIT_MARGIN + 0.5, 55]
     const fired: number[] = []
-    for (let k = 0; k <= 4 * 60; k++) {
+    for (let k = 0; k <= 5 * 60; k++) {
       const t = k * H
-      // the attacker steps out at t = 1.0 and stays out
-      const att: [number, number] = t < 1 ? [30, 55] : out
+      // inside until 1.0 s, out until 2.0 s, back in until 3.0 s, then out for good
+      const att: [number, number] = t < 1 ? [30, 55] : t < 2 ? out : t < 3 ? [30, 55] : out
       if (trackExit(tr, rule, att, t)) fired.push(+t.toFixed(3))
     }
+    expect(fired).toHaveLength(2)
     expect(fired[0]).toBeGreaterThanOrEqual(1.3 - 1e-6)
     expect(fired[0]).toBeLessThan(1.3 + 2 * H)
-    // cooldown: locked out for HANDOFF_COOLDOWN after firing, then a fresh 0.3 s exit
-    expect(fired[1]).toBeGreaterThanOrEqual(fired[0] + HANDOFF_COOLDOWN + 0.3 - 2 * H)
+    // he stayed out after the first handoff and nothing fired again until he had come back in and left again
+    expect(fired[1]).toBeGreaterThanOrEqual(3.3 - 1e-6)
+    expect(fired[1]).toBeLessThan(3.3 + 2 * H)
+  })
+
+  it('the follower is locked out for HANDOFF_COOLDOWN after a handoff', () => {
+    const tr = newFollowTrack()
+    const out: [number, number] = [50, 55]
+    let first = -1
+    for (let k = 0; k <= 3 * 60 && first < 0; k++) {
+      const t = k * H
+      if (trackExit(tr, rule, t < 0.5 ? [30, 55] : out, t)) first = t
+    }
+    expect(first).toBeGreaterThan(0)
+    expect(tr.cooldownUntil).toBeCloseTo(first + HANDOFF_COOLDOWN, 6)
+    // he comes straight back in and leaves again inside the cooldown: no second handoff until it is over
+    let second = -1
+    for (let k = Math.round(first / H) + 1; k <= 6 * 60 && second < 0; k++) {
+      const t = k * H
+      const att: [number, number] = t < first + 0.4 ? [30, 55] : out
+      if (trackExit(tr, rule, att, t)) second = t
+    }
+    expect(second === -1 || second >= first + HANDOFF_COOLDOWN - 1e-6).toBe(true)
+  })
+
+  it('an attacker who starts outside the bounds has to come in before he can leave (no instant handoff)', () => {
+    const tr = newFollowTrack()
+    for (let k = 0; k < 4 * 60; k++) expect(trackExit(tr, rule, [34, 82], k * H)).toBe(false) // waits outside the area
+    expect(tr.entered).toBe(false)
+    let fired = false
+    for (let k = 4 * 60; k < 9 * 60; k++) {
+      const t = k * H
+      const att: [number, number] = t < 6 ? [34, 60] : [34, 82] // drops in at 4 s, leaves again at 6 s
+      if (trackExit(tr, rule, att, t)) fired = true
+    }
+    expect(fired).toBe(true)
   })
 
   it('does not fire for an attacker only just outside the bounds (inside the margin)', () => {
@@ -310,6 +345,7 @@ describe('follow: handoff inside the simulation', () => {
     const out = tl.frames.find((f) => f.players.a1.x > 40 + EXIT_MARGIN)!
     expect(tl.events).toHaveLength(1)
     const ev = tl.events[0]
+    if (ev.type !== 'handoff') throw new Error('expected a handoff event')
     expect(ev.from).toBe('d1')
     expect(ev.attacker).toBe('a1')
     expect(ev.t - out.t).toBeGreaterThanOrEqual(0.3 - 2 * H)
@@ -321,7 +357,7 @@ describe('follow: handoff inside the simulation', () => {
     expect(ev.to).toBe('d2')
     expect(tl.end.d2.rule).toMatchObject({ type: 'mark', attacker: 'a1' })
     // d1 does not pick the attacker up again, and there is no second handoff
-    expect(tl.events.filter((e) => e.from === 'd1')).toHaveLength(1)
+    expect(tl.events.filter((e) => e.type === 'handoff' && e.from === 'd1')).toHaveLength(1)
     for (const f of tl.frames.filter((fr) => fr.t > ev.t && fr.t < ev.t + HANDOFF_COOLDOWN)) {
       expect(f.marks.some((m) => m.from === 'd1')).toBe(false)
     }
@@ -330,13 +366,13 @@ describe('follow: handoff inside the simulation', () => {
   it("handoff 'none': the follower reverts and nobody takes over", () => {
     const tl = getTimeline(scenario('none'), 0)
     expect(tl.events).toHaveLength(1)
-    expect(tl.events[0].to).toBeNull()
+    expect(tl.events[0]).toMatchObject({ type: 'handoff', to: null })
     expect(tl.end.d2.rule).toBeNull()
   })
 
   it('handoff to a named player', () => {
     const tl = getTimeline(scenario('d3'), 0)
-    expect(tl.events[0].to).toBe('d3')
+    expect(tl.events[0]).toMatchObject({ type: 'handoff', to: 'd3' })
     expect(tl.end.d3.rule).toMatchObject({ type: 'mark', attacker: 'a1' })
   })
 
