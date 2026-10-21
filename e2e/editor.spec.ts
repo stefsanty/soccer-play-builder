@@ -53,4 +53,64 @@ test.describe('pitch editor', () => {
     await page.getByTestId('player-o-LST').click()
     await expect(page.getByTestId('pass-arrow')).toHaveCount(1)
   })
+
+  test.describe('preview mode', () => {
+    test.beforeEach(async ({ page }) => {
+      await page.getByTestId('mode-preview').click()
+    })
+
+    test('Preview switches to the animated pitch', async ({ page }) => {
+      await expect(page.getByTestId('animated-pitch')).toBeVisible()
+      await expect(page.getByTestId('pitch-svg')).toHaveCount(0)
+      await expect(page.getByTestId('animated-pitch-svg').locator('[data-team="ours"] circle')).toHaveCount(11)
+      await expect(page.getByTestId('anim-step-indicator')).toContainText('Step 1 of 1')
+      await page.getByTestId('mode-select').click()
+      await expect(page.getByTestId('pitch-svg')).toBeVisible()
+    })
+
+    test('auto-plays, Pause stops it and Play resumes', async ({ page }) => {
+      const bar = page.getByTestId('progress-bar')
+      const toggle = page.getByTestId('play-toggle')
+      const value = async () => Number(await bar.inputValue())
+
+      await expect(toggle).toHaveAttribute('aria-label', 'Pause') // auto-started
+      await expect.poll(value).toBeGreaterThan(0)
+
+      await toggle.click()
+      await expect(toggle).toHaveAttribute('aria-label', 'Play')
+      const paused = await value()
+      await page.waitForTimeout(400)
+      expect(await value()).toBe(paused)
+
+      await toggle.click()
+      await expect.poll(value).toBeGreaterThan(paused)
+    })
+
+    test('scrubbing the progress bar and Reset', async ({ page }) => {
+      await page.getByTestId('play-toggle').click() // pause
+      await page.getByTestId('progress-bar').fill('500')
+      await expect(page.getByTestId('progress-bar')).toHaveValue('500')
+      await page.getByTestId('reset').click()
+      await expect(page.getByTestId('progress-bar')).toHaveValue('0')
+    })
+
+    test('player moves along a run while playing', async ({ page }) => {
+      await page.getByTestId('mode-select').click()
+      await page.getByRole('button', { name: 'Add Step', exact: true }).click()
+      const lst = page.getByTestId('player-o-LST').locator('circle')
+      const box = (await lst.boundingBox())!
+      const cx = box.x + box.width / 2
+      const cy = box.y + box.height / 2
+      await page.mouse.move(cx, cy)
+      await page.mouse.down()
+      await page.mouse.move(cx + 60, cy - 120, { steps: 5 })
+      await page.mouse.up()
+      await page.getByTestId('mode-preview').click()
+      await page.getByTestId('play-toggle').click() // pause at start
+      const player = page.getByTestId('anim-player-o-LST').locator('circle')
+      const start = (await player.boundingBox())!
+      await page.getByTestId('progress-bar').fill('1000')
+      await expect.poll(async () => (await player.boundingBox())!.y).toBeLessThan(start.y - 40)
+    })
+  })
 })
