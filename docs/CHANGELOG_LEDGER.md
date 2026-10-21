@@ -12,3 +12,4 @@
 - v0.6.0 — feat: rebuild UI to match docs/mockups — home list with offline banner + thumbnails, striped pitch editor with step-note pill, icon toolbar and step chips, shared-play viewer with step list
 - v0.6.1 — fix: penalty arcs on the pitch now meet the penalty box edge (arc endpoints were swapped)
 - v0.7.0 — feat: editor interaction feedback — press/hover states, selected + pending player rings, ball marker with holder ring and "Ball: X" chip, action confirmations, haptic vibration
+- v0.7.1 — fix: wire PitchEditor into /editor/[id] (was a "coming soon" placeholder); saving an existing play updates it instead of creating a copy

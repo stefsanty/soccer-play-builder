@@ -39,7 +39,9 @@ export function SaveButton() {
         players: play.players,
         steps: play.steps,
       }
-      const saved = savedId ? await updatePlay(savedId, input) : await createPlay(input)
+      // A play loaded from the database already has an id; only a fresh draft is created.
+      const existingId = play.id !== 'draft' ? play.id : savedId
+      const saved = existingId ? await updatePlay(existingId, input) : await createPlay(input)
       setSavedId(saved.id)
       markSaved()
       setStatus('saved')
