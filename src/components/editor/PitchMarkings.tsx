@@ -1,6 +1,6 @@
 import { PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 
-const LINE = { fill: 'none', stroke: 'white', strokeOpacity: 0.7, strokeWidth: 2 } as const
+const LINE = { fill: 'none', stroke: 'white', strokeOpacity: 0.85, strokeWidth: 2 } as const
 
 export function PitchMarkings() {
   const w = PITCH_W * 10

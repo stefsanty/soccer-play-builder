@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { ChevronLeft } from 'lucide-react'
 import { createPlay } from '@/lib/api/plays'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 
@@ -27,16 +28,16 @@ export default function NewPlayPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-[var(--app-bg)] text-white">
-      <header className="flex items-center gap-3 border-b border-slate-800 px-4 py-4">
-        <Link href="/" aria-label="Back to plays" className="text-slate-400 hover:text-white">
-          ←
+    <main className="flex flex-1 flex-col bg-[var(--bg-base)] text-[#e8edf2]">
+      <header className="flex h-11 items-center gap-0.5 border-b border-[var(--app-line)] px-2">
+        <Link href="/" aria-label="Back to plays" className="flex size-11 items-center justify-center text-[var(--app-accent)]">
+          <ChevronLeft className="size-[26px]" strokeWidth={2.4} aria-hidden />
         </Link>
-        <h1 className="text-xl font-bold">New Play</h1>
+        <h1 className="m-0 text-base font-semibold">New play</h1>
       </header>
 
-      <form onSubmit={onSubmit} className="flex flex-1 flex-col gap-4 p-4">
-        <label htmlFor="play-title" className="text-sm font-medium text-slate-300">
+      <form onSubmit={onSubmit} className="flex flex-1 flex-col gap-4 px-5 pt-6">
+        <label htmlFor="play-title" className="text-sm font-medium text-[var(--app-muted)]">
           Play title
         </label>
         <input
@@ -45,7 +46,7 @@ export default function NewPlayPage() {
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           maxLength={120}
-          className="rounded-xl border border-slate-700 bg-[var(--app-card)] px-4 py-3 text-white outline-none focus:border-[#14b8a6] focus:ring-2 focus:ring-[#14b8a6]/40"
+          className="rounded-[14px] border border-[var(--app-line)] bg-[var(--app-card)] px-4 py-3 text-[#e8edf2] outline-none focus:border-[var(--app-accent)] focus:ring-2 focus:ring-[var(--app-accent)]/40"
         />
         {error && (
           <p role="alert" data-testid="new-play-error" className="text-sm text-red-400">
@@ -55,9 +56,9 @@ export default function NewPlayPage() {
         <button
           type="submit"
           disabled={submitting}
-          className="mt-2 rounded-xl bg-[#14b8a6] px-5 py-3 text-sm font-semibold text-[#0f172a] transition-colors hover:bg-[#2dd4bf] disabled:opacity-60"
+          className="mt-2 h-[52px] rounded-[14px] bg-[var(--app-accent)] text-[17px] font-bold text-[var(--app-accent-ink)] transition-colors disabled:opacity-60"
         >
-          {submitting ? 'Creating…' : 'Create Play'}
+          {submitting ? 'Creating…' : 'Create play'}
         </button>
       </form>
     </main>

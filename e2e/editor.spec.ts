@@ -24,12 +24,19 @@ test.describe('pitch editor', () => {
     await expect(page.getByTestId('mode-pass')).toHaveAttribute('aria-pressed', 'true')
   })
 
-  test('step counter shows Step 1', async ({ page }) => {
-    await expect(page.getByTestId('step-counter')).toContainText('Step 1')
+  test('step chips: add a step and switch between steps', async ({ page }) => {
+    await expect(page.getByTestId('step-chip-0')).toHaveAttribute('aria-current', 'step')
     await page.getByRole('button', { name: 'Add Step', exact: true }).click()
-    await expect(page.getByTestId('step-counter')).toContainText('Step 2')
-    await page.getByRole('button', { name: 'Prev Step' }).click()
-    await expect(page.getByTestId('step-counter')).toContainText('Step 1')
+    await expect(page.getByTestId('step-chip-1')).toHaveAttribute('aria-current', 'step')
+    await page.getByTestId('step-chip-0').click()
+    await expect(page.getByTestId('step-chip-0')).toHaveAttribute('aria-current', 'step')
+  })
+
+  test('step note pill expands on tap', async ({ page }) => {
+    const note = page.getByTestId('step-note')
+    await expect(note).toHaveAttribute('aria-expanded', 'false')
+    await note.click()
+    await expect(note).toHaveAttribute('aria-expanded', 'true')
   })
 
   test('player drag changes position', async ({ page }) => {

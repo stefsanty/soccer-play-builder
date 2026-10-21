@@ -1,9 +1,10 @@
 'use client'
 
-// Saves the editor's current play: POST on first save, PUT afterwards.
+// "Done" check in the top bar: saves the editor's current play (POST first, PUT afterwards).
+// Without a database it shows the DB warning instead.
 
 import { useState } from 'react'
-import { Button } from '@/components/ui/button'
+import { Check, Loader2, RotateCcw } from 'lucide-react'
 import { useEditorStore } from '@/lib/store/editorStore'
 import { createPlay, updatePlay } from '@/lib/api/plays'
 import type { PlayInsert } from '@/lib/types/play'
@@ -18,27 +19,13 @@ export function SaveButton() {
   const [status, setStatus] = useState<Status>('idle')
   const [savedId, setSavedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-
   const [showDbNotice, setShowDbNotice] = useState(false)
 
-  if (!isSupabaseConfigured()) {
-    // The banner is absolutely positioned under the (relative) top bar.
-    return (
-      <>
-        <Button size="sm" data-testid="save-button" className="bg-[#14b8a6] text-[#0f172a] hover:bg-[#0d9488]"
-          onClick={() => setShowDbNotice(true)}>
-          Save
-        </Button>
-        {showDbNotice && (
-          <div className="absolute inset-x-0 top-full p-2">
-            <DbBanner />
-          </div>
-        )}
-      </>
-    )
-  }
-
   async function onSave() {
+    if (!isSupabaseConfigured()) {
+      setShowDbNotice(true)
+      return
+    }
     if (!play) return
     setStatus('saving')
     setError(null)
@@ -63,23 +50,33 @@ export function SaveButton() {
     }
   }
 
+  const label = status === 'saving' ? 'Saving' : status === 'saved' ? 'Saved' : status === 'error' ? 'Retry save' : 'Save'
+  const Icon = status === 'saving' ? Loader2 : status === 'error' ? RotateCcw : Check
+
   return (
-    <div className="flex items-center gap-2">
-      <Button
-        size="sm"
-        variant={status === 'error' ? 'destructive' : 'default'}
-        disabled={!play || status === 'saving'}
-        onClick={onSave}
+    <>
+      <button
+        type="button"
         data-testid="save-button"
-        className={status === 'error' ? '' : 'bg-[#14b8a6] text-[#0f172a] hover:bg-[#0d9488]'}
+        data-status={status}
+        aria-label={label}
+        disabled={status === 'saving'}
+        onClick={onSave}
+        className={`flex h-11 w-10 items-center justify-center ${status === 'error' ? 'text-[#ff6b6b]' : 'text-[#14b8a6]'}`}
       >
-        {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved ✓' : status === 'error' ? 'Retry save' : 'Save'}
-      </Button>
-      {status === 'error' && (
-        <span role="alert" data-testid="save-error" className="text-xs text-red-400">
-          {error}
-        </span>
+        <Icon className={`size-[22px] ${status === 'saving' ? 'animate-spin' : ''}`} strokeWidth={2.6} aria-hidden />
+      </button>
+      {(showDbNotice || status === 'error') && (
+        <div className="absolute inset-x-0 top-full p-2">
+          {status === 'error' ? (
+            <p role="alert" data-testid="save-error" className="rounded-md border border-red-500/40 bg-[var(--app-card)] px-3 py-2 text-sm text-red-300 shadow-lg">
+              {error}
+            </p>
+          ) : (
+            <DbBanner />
+          )}
+        </div>
       )}
-    </div>
+    </>
   )
 }

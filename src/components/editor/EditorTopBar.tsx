@@ -1,19 +1,34 @@
 'use client'
 
-// Edit-mode top bar: back chevron, editable play title (centered), Save.
+// Edit-mode top bar: back, editable play title, undo/redo (placeholders), share, done (save).
 
 import Link from 'next/link'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, Redo2, Share, Undo2 } from 'lucide-react'
 import { useEditorStore } from '@/lib/store/editorStore'
 import { SaveButton } from '@/components/editor/SaveButton'
+
+const iconBtn = 'flex h-11 w-10 items-center justify-center border-0 bg-transparent'
 
 export function EditorTopBar() {
   const play = useEditorStore((s) => s.play)
   const setPlay = useEditorStore((s) => s.setPlay)
+  const canShare = !!play && play.id !== 'draft'
+
+  async function share() {
+    if (!play) return
+    const url = `${window.location.origin}/play/${play.id}`
+    try {
+      if (navigator.share) await navigator.share({ title: play.title, url })
+      else await navigator.clipboard.writeText(url)
+    } catch {
+      /* share sheet dismissed */
+    }
+  }
+
   return (
-    <header className="relative z-10 flex h-14 shrink-0 items-center gap-2 bg-[var(--bg-card)] px-2 text-white">
-      <Link href="/" aria-label="Back to plays" className="flex size-10 items-center justify-center rounded-full text-slate-300 hover:text-white">
-        <ChevronLeft className="size-6" aria-hidden />
+    <header className="relative z-10 flex h-11 shrink-0 items-center gap-0.5 border-b border-[var(--app-line)] bg-[var(--bg-base)] px-2 text-[#e8edf2]">
+      <Link href="/" aria-label="Back" className="flex size-11 items-center justify-center text-[var(--app-accent)]">
+        <ChevronLeft className="size-[26px]" strokeWidth={2.4} aria-hidden />
       </Link>
       <input
         data-testid="play-title"
@@ -22,8 +37,23 @@ export function EditorTopBar() {
         placeholder="New play"
         disabled={!play}
         onChange={(e) => play && setPlay({ ...play, title: e.target.value })}
-        className="min-w-0 flex-1 truncate rounded-md bg-transparent px-2 py-1 text-center text-base font-semibold text-white outline-none placeholder:text-slate-500 focus:bg-slate-700/50"
+        className="min-w-0 flex-1 truncate rounded-md bg-transparent px-0.5 text-base font-semibold leading-tight text-[#e8edf2] outline-none placeholder:text-slate-500 focus:bg-white/5"
       />
+      <button type="button" aria-label="Undo" disabled className={`${iconBtn} text-[#5d6b7a]`}>
+        <Undo2 className="size-5" aria-hidden />
+      </button>
+      <button type="button" aria-label="Redo" disabled className={`${iconBtn} text-[#5d6b7a]`}>
+        <Redo2 className="size-5" aria-hidden />
+      </button>
+      <button
+        type="button"
+        aria-label="Share"
+        disabled={!canShare}
+        onClick={share}
+        className={`${iconBtn} ${canShare ? 'text-[#e8edf2]' : 'text-[#5d6b7a]'}`}
+      >
+        <Share className="size-[22px]" aria-hidden />
+      </button>
       <SaveButton />
     </header>
   )

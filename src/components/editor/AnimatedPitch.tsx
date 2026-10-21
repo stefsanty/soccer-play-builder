@@ -11,6 +11,7 @@ import type { Play } from '@/lib/types/play'
 import { mToSvg } from '@/lib/engine/pitch'
 import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
 import { PitchMarkings } from './PitchMarkings'
+import { PitchSurface } from './PitchSurface'
 import { Button } from '@/components/ui/button'
 
 interface AnimatedPitchProps {
@@ -63,10 +64,11 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
       <svg
         data-testid="animated-pitch-svg"
         viewBox="-20 -20 720 1090"
-        className="mx-auto h-auto max-h-[75vh] w-full select-none rounded-lg bg-[#16a34a]"
+        className="mx-auto h-auto max-h-[75vh] w-full select-none rounded-lg bg-[var(--pitch)]"
         role="img"
         aria-label="Animated soccer play"
       >
+        <PitchSurface />
         <PitchMarkings />
 
         {frame?.runTrails.map((trail) => (
@@ -75,7 +77,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
             data-testid="run-trail"
             d={trailPath(trail.points, trail.progress)}
             fill="none"
-            stroke="#fde047"
+            stroke="#ffd43b"
             strokeWidth={3}
             strokeDasharray="8 6"
             strokeLinecap="round"
@@ -95,8 +97,8 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
           const s = mToSvg(p.x, p.y)
           return (
             <g key={p.id} data-testid={`anim-player-${p.id}`} data-team={p.team} transform={`translate(${s.svgX}, ${s.svgY})`}>
-              <circle r={24} fill={p.team === 'ours' ? '#0ea5e9' : '#ef4444'} stroke={p.team === 'ours' ? '#0369a1' : '#b91c1c'} strokeWidth={3} />
-              <text textAnchor="middle" dy={6} fontSize={17} fill="white" fontWeight={700} pointerEvents="none">
+              <circle r={20} fill={p.team === 'ours' ? '#2f8cff' : '#e5484d'} stroke="white" strokeWidth={2.5} />
+              <text textAnchor="middle" dy={4} fontSize={12} fill="white" fontWeight={700} pointerEvents="none">
                 {p.label}
               </text>
             </g>
@@ -129,7 +131,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
           type="range"
           data-testid="progress-bar"
           aria-label="Playback progress"
-          className="w-full accent-[#14b8a6]"
+          className="w-full accent-[#4cc9f0]"
           min={0}
           max={1000}
           value={Math.round(progress * 1000)}

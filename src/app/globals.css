@@ -49,24 +49,24 @@
 }
 
 :root {
-  --background: #0f172a;
-  --foreground: #ffffff;
-  --card: #1e293b;
+  --background: #0b1015;
+  --foreground: #e8edf2;
+  --card: #151b22;
   --card-foreground: #ffffff;
   --popover: #1e293b;
   --popover-foreground: #ffffff;
-  --primary: #14b8a6;
-  --primary-foreground: #0f172a;
-  --secondary: #1e293b;
+  --primary: #4cc9f0;
+  --primary-foreground: #04202b;
+  --secondary: #151b22;
   --secondary-foreground: #ffffff;
-  --muted: #1e293b;
-  --muted-foreground: #94a3b8;
+  --muted: #151b22;
+  --muted-foreground: #9aa7b4;
   --accent: #273449;
   --accent-foreground: #ffffff;
   --destructive: oklch(0.577 0.245 27.325);
-  --border: #334155;
-  --input: #334155;
-  --ring: #14b8a6;
+  --border: #243040;
+  --input: #243040;
+  --ring: #4cc9f0;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -82,19 +82,23 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
   /* Soccer Play Builder dark theme */
-  --app-bg: #0f172a;
-  --app-card: #1e293b;
-  --app-accent: #14b8a6;
-  --bg-base: #0f172a;
-  --bg-card: #1e293b;
-  --bg-toolbar: #111827;
-  --accent-hover: #0d9488;
-  --pitch: #16a34a;
+  --app-bg: #0b1015;
+  --app-card: #151b22;
+  --app-accent: #4cc9f0;
+  --app-accent-ink: #04202b;
+  --app-line: #243040;
+  --app-chip: #2a3644;
+  --app-muted: #9aa7b4;
+  --bg-base: #0b1015;
+  --bg-card: #151b22;
+  --bg-toolbar: #0b1015;
+  --accent-hover: #8fe3ff;
+  --pitch: #2c7a3b;
+  --pitch-stripe: #318541;
   --pitch-lines: rgba(255, 255, 255, 0.7);
-  --team-ours: #0ea5e9;
-  --team-ours-stroke: #0369a1;
-  --team-opp: #ef4444;
-  --team-opp-stroke: #b91c1c;
+  --team-ours: #2f8cff;
+  --team-opp: #e5484d;
+  --run: #ffd43b;
 }
 
 .dark {
@@ -136,9 +140,9 @@
     @apply border-border outline-ring/50;
   }
   body {
-    background: #0f172a;
-    font-family: var(--font-geist-sans), system-ui, sans-serif;
-    color: white;
+    background: #0b1015;
+    font-family: Inter, var(--font-geist-sans), system-ui, -apple-system, 'Segoe UI', sans-serif;
+    color: #e8edf2;
   }
   html {
     @apply font-sans;

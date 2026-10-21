@@ -13,7 +13,7 @@ test.describe('save / library', () => {
     if (await page.getByTestId('db-banner').count()) {
       await expect(page.getByTestId('db-banner')).toContainText(/Database not configured/)
     } else {
-      await expect(save).toHaveText(/Saved|Retry save/)
+      await expect(save).toHaveAttribute('data-status', /saved|error/)
     }
     // Editor stays usable either way.
     await expect(page.getByText(/application error|something went wrong/i)).toHaveCount(0)
