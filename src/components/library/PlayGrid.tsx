@@ -7,10 +7,15 @@ interface PlayGridProps {
 
 export function PlayGrid({ plays }: PlayGridProps) {
   if (plays.length === 0) {
-    return <p className="text-slate-500">No plays yet — create one in the editor.</p>
+    return (
+      <div className="flex flex-col items-center gap-1 py-16 text-center">
+        <p className="text-lg font-semibold text-slate-300">No plays yet</p>
+        <p className="text-sm text-slate-500">Tap “+ New Play” to build your first one.</p>
+      </div>
+    )
   }
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div className="grid grid-cols-2 gap-3">
       {plays.map((play) => (
         <PlayCard key={play.id} play={play} />
       ))}

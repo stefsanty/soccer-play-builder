@@ -1,18 +1,26 @@
 import Link from 'next/link'
+import { LibraryClient } from '@/components/library/LibraryClient'
+import { DbBanner } from '@/components/layout/DbBanner'
 
 export default function HomePage() {
   return (
-    <main className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center gap-8 p-8">
-      <h1 className="text-5xl font-bold">Soccer Play Builder</h1>
-      <p className="text-slate-400 text-xl text-center max-w-md">
-        Create, animate, and share tactical patterns of play for soccer.
-      </p>
-      <div className="flex gap-4">
-        <Link href="/editor" className="bg-blue-600 hover:bg-blue-500 px-6 py-3 rounded-lg font-semibold transition-colors">
-          Open Editor
-        </Link>
-        <Link href="/library" className="border border-slate-600 hover:border-slate-400 px-6 py-3 rounded-lg font-semibold transition-colors">
-          Browse Plays
+    <main className="flex min-h-screen flex-col bg-[var(--app-bg)] text-white">
+      <header className="sticky top-0 z-10 border-b border-slate-800 bg-[var(--app-bg)] px-4 py-4">
+        <h1 className="text-xl font-bold">Soccer Play Builder</h1>
+        <p className="text-xs text-slate-400">Your plays</p>
+      </header>
+
+      <div className="flex-1 space-y-3 p-4 pb-28">
+        <DbBanner />
+        <LibraryClient />
+      </div>
+
+      <div className="pointer-events-none fixed bottom-0 left-1/2 z-20 flex w-full max-w-[390px] -translate-x-1/2 justify-end p-4">
+        <Link
+          href="/editor"
+          className="pointer-events-auto rounded-full bg-[#14b8a6] px-5 py-3 text-sm font-semibold text-[#0f172a] shadow-lg transition-colors hover:bg-[#2dd4bf]"
+        >
+          + New Play
         </Link>
       </div>
     </main>

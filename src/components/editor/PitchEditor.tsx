@@ -152,47 +152,21 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const hint =
     mode === 'pass' ? (pendingFrom ? 'Now click the receiving player' : 'Click the passer, then the receiver')
     : mode === 'run' ? (pendingFrom ? 'Click the pitch to set the run destination' : 'Click a player, then a destination')
-    : mode === 'preview' ? 'Preview mode — press Play, or pick another mode to edit'
+    : mode === 'preview' ? 'Present mode — press Play, or Edit to go back'
     : 'Drag players to reposition them'
 
   return (
     <div className="flex flex-col gap-2 w-full">
-      <div className="flex flex-wrap items-center gap-2" role="toolbar" aria-label="Pitch editor toolbar">
-        <div className="flex gap-1">
-          {MODES.map((m) => (
-            <Button
-              key={m.mode}
-              size="sm"
-              variant={mode === m.mode ? 'default' : 'secondary'}
-              aria-pressed={mode === m.mode}
-              data-testid={`mode-${m.mode}`}
-              onClick={() => setMode(m.mode)}
-            >
-              {m.label}
-            </Button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1 ml-auto">
-          <Button size="sm" variant="outline" disabled={currentStepIndex <= 0}
-            onClick={() => setCurrentStep(currentStepIndex - 1)}>Prev Step</Button>
-          <span data-testid="step-counter" className="px-2 text-sm tabular-nums" aria-live="polite">
-            Step {currentStepIndex + 1} of {play?.steps.length ?? 1}
-          </span>
-          <Button size="sm" variant="outline" disabled={!play || currentStepIndex >= play.steps.length - 1}
-            onClick={() => setCurrentStep(currentStepIndex + 1)}>Next Step</Button>
-          <Button size="sm" variant="outline" onClick={addStep}>Add Step</Button>
-        </div>
-      </div>
       <p className="text-xs text-slate-400" data-testid="editor-hint">{hint}</p>
 
       {mode === 'preview' && play ? (
-        <AnimatedPitch play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep} />
+        <AnimatedPitch play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep} onExit={() => setMode('select')} />
       ) : (
         <svg
           ref={svgRef}
           data-testid="pitch-svg"
           viewBox="-20 -20 720 1090"
-          className="w-full h-auto max-h-[75vh] mx-auto rounded-lg bg-emerald-700 touch-none select-none"
+          className="w-full h-auto max-h-[75vh] mx-auto rounded-lg bg-[#16a34a] touch-none select-none"
           role="img"
           aria-label="Soccer pitch editor"
           onPointerDown={onPitchDown}
@@ -248,7 +222,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
               >
                 <circle
                   r={16}
-                  fill={p.team === 'ours' ? '#2563eb' : '#dc2626'}
+                  fill={p.team === 'ours' ? '#0ea5e9' : '#ef4444'}
                   stroke={active ? '#fde047' : 'white'}
                   strokeWidth={active ? 4 : 2}
                 />
@@ -259,6 +233,41 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             )
           })}
         </svg>
+      )}
+      {mode !== 'preview' && (
+        <>
+          <div className="h-28" aria-hidden />
+          <div
+            className="fixed bottom-0 left-1/2 z-20 flex w-full max-w-[390px] -translate-x-1/2 flex-col gap-2 border-t border-slate-800 bg-[var(--app-bg)]/95 p-3 backdrop-blur"
+            role="toolbar"
+            aria-label="Pitch editor toolbar"
+          >
+            <div className="grid grid-cols-4 gap-1">
+              {MODES.map((m) => (
+                <Button
+                  key={m.mode}
+                  size="sm"
+                  variant={mode === m.mode ? 'default' : 'secondary'}
+                  aria-pressed={mode === m.mode}
+                  data-testid={`mode-${m.mode}`}
+                  onClick={() => setMode(m.mode)}
+                >
+                  {m.label}
+                </Button>
+              ))}
+            </div>
+            <div className="flex items-center justify-between gap-1">
+              <Button size="sm" variant="ghost" aria-label="Prev Step" disabled={currentStepIndex <= 0}
+                onClick={() => setCurrentStep(currentStepIndex - 1)}>◀</Button>
+              <span data-testid="step-counter" className="px-2 text-sm tabular-nums text-slate-300" aria-live="polite">
+                Step {currentStepIndex + 1} of {play?.steps.length ?? 1}
+              </span>
+              <Button size="sm" variant="ghost" aria-label="Next Step" disabled={!play || currentStepIndex >= play.steps.length - 1}
+                onClick={() => setCurrentStep(currentStepIndex + 1)}>▶</Button>
+              <Button size="sm" variant="outline" aria-label="Add Step" onClick={addStep}>+ Step</Button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   )
