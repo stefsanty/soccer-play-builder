@@ -16,7 +16,7 @@ import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import type { Play } from '@/lib/types/play'
 import { ballHolderAfter } from '@/lib/engine/ballHolder'
 import { haptic } from '@/lib/haptics'
-import { Check, ChevronDown, CircleDot, MousePointer2, MoveUpRight, Pencil, Play as PlayIcon, Zap } from 'lucide-react'
+import { Check, ChevronDown, CircleDot, Move, MoveUpRight, Pencil, X, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 interface PitchEditorProps {
@@ -27,10 +27,9 @@ interface PitchEditorProps {
 type Pos = { x: number; y: number }
 
 const MODES: { mode: EditorMode; label: string; Icon: LucideIcon }[] = [
-  { mode: 'select', label: 'Select', Icon: MousePointer2 },
+  { mode: 'select', label: 'Move', Icon: Move },
   { mode: 'pass', label: 'Pass', Icon: MoveUpRight },
   { mode: 'run', label: 'Run', Icon: Zap },
-  { mode: 'preview', label: 'Preview', Icon: PlayIcon },
 ]
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
@@ -59,7 +58,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const updatePlayerPosition = useEditorStore((s) => s.updatePlayerPosition)
 
   const svgRef = useRef<SVGSVGElement>(null)
-  const dragRef = useRef<{ id: string; moved: boolean } | null>(null)
+  const dragRef = useRef<{ id: string; moved: boolean; wasSelected: boolean } | null>(null)
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null)
   // First click of a pass/run gesture: the source player.
   const [pendingFrom, setPendingFrom] = useState<string | null>(null)
@@ -82,7 +81,35 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     if (play) onUpdate?.(play)
   }, [play, onUpdate])
 
-  useEffect(() => { setPendingFrom(null) }, [mode, currentStepIndex])
+  useEffect(() => { setPendingFrom(null) }, [currentStepIndex])
+
+  // Back to a clean pitch: nothing selected, default tool, no half-finished pass/run.
+  const clearSelection = () => {
+    selectPlayer(null)
+    setPendingFrom(null)
+    if (useEditorStore.getState().mode !== 'preview') setMode('select')
+  }
+
+  // Escape deselects; entering Play mode drops any selection.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const st = useEditorStore.getState()
+      if (st.selectedPlayerId || st.mode === 'pass' || st.mode === 'run') {
+        st.selectPlayer(null)
+        setPendingFrom(null)
+        if (st.mode !== 'preview') st.setMode('select')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  useEffect(() => {
+    if (mode === 'preview') {
+      selectPlayer(null)
+      setPendingFrom(null)
+    }
+  }, [mode, selectPlayer])
 
   const positions = useMemo(() => (play ? positionsAt(play, currentStepIndex) : new Map<string, Pos>()), [play, currentStepIndex])
   const prevPositions = useMemo(
@@ -110,9 +137,11 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     announce(currentStepIndex === 0 ? `Moved ${labelOf(id)}` : `Run set for ${labelOf(id)}`, m)
   }
 
+  // Picking Pass or Run uses the selected player as the source.
   const changeMode = (m: EditorMode) => {
     if (m !== mode) haptic(8)
     setMode(m)
+    setPendingFrom(m === 'select' ? null : selectedPlayerId)
   }
   const goToStep = (i: number) => {
     if (i !== currentStepIndex) haptic(8)
@@ -131,21 +160,22 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     haptic(8)
     if (mode === 'pass') {
       if (!pendingFrom) setPendingFrom(id)
-      else if (pendingFrom === id) setPendingFrom(null) // tap the passer again to cancel
+      else if (pendingFrom === id) clearSelection() // tap the passer again to cancel
       else {
         addPass({ from: pendingFrom, to: id, startTime: 0, endTime: step.duration }, currentStepIndex)
-        setPendingFrom(null)
         haptic(15)
         announce(`Pass added: ${labelOf(pendingFrom)} to ${labelOf(id)}`)
+        clearSelection()
       }
       return
     }
     if (mode === 'run') {
-      setPendingFrom(pendingFrom === id ? null : id)
+      if (pendingFrom === id) clearSelection()
+      else setPendingFrom(id)
       return
     }
     e.currentTarget.setPointerCapture(e.pointerId)
-    dragRef.current = { id, moved: false }
+    dragRef.current = { id, moved: false, wasSelected: selectedPlayerId === id }
     const pos = positions.get(id)
     if (pos) setDrag({ id, ...pos })
   }
@@ -166,16 +196,16 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     const m = toMeters(e)
     setDrag(null)
     if (d.moved && m) commitPosition(d.id, m)
+    else if (d.wasSelected) clearSelection() // tap the selected player again to deselect
   }
 
   // Run tool, second click: the pitch point is the destination.
   const onPitchDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (mode === 'select') selectPlayer(null)
-    if (mode !== 'run' || !pendingFrom) return
-    const m = toMeters(e)
-    if (!m) return
-    commitPosition(pendingFrom, m)
-    setPendingFrom(null)
+    if (mode === 'run' && pendingFrom) {
+      const m = toMeters(e)
+      if (m) commitPosition(pendingFrom, m)
+    }
+    clearSelection() // tapping the open pitch always returns to the clean state
   }
 
   const svgPos = (id: string) => {
@@ -195,7 +225,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     <div className="flex min-h-0 w-full flex-1 flex-col">
       {mode === 'preview' && play ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <AnimatedPitch play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep} onExit={() => setMode('select')} />
+          <AnimatedPitch play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep} />
         </div>
       ) : (
         <div className="relative min-h-0 flex-1 bg-[var(--pitch)]">
@@ -329,32 +359,46 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             </div>
           )}
         </div>
+        {selectedPlayerId && (
+          <div
+            role="toolbar"
+            aria-label="Player actions"
+            data-testid="player-toolbar"
+            className="absolute inset-x-3 bottom-3 rounded-2xl border border-white/10 bg-[rgba(11,16,21,0.92)] p-1.5 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-4 duration-200"
+          >
+            <div className="flex items-center justify-between px-2 pb-1 text-xs font-semibold text-[var(--app-muted)]">
+              <span>
+                Selected: <span className="text-[#e8edf2]">{labelOf(selectedPlayerId)}</span>
+              </span>
+              <button type="button" aria-label="Deselect" data-testid="deselect" onClick={clearSelection}
+                className="flex size-6 touch-manipulation items-center justify-center rounded-full transition-transform duration-100 hover:bg-white/10 active:scale-90">
+                <X className="size-4" aria-hidden />
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              {MODES.map(({ mode: m, label, Icon }) => (
+                <button
+                  key={m}
+                  type="button"
+                  aria-label={label}
+                  aria-pressed={mode === m}
+                  data-testid={`mode-${m}`}
+                  onClick={() => changeMode(m)}
+                  className={`flex h-11 touch-manipulation select-none flex-col items-center justify-center gap-0.5 rounded-[10px] text-[10px] font-medium transition-all duration-100 active:scale-95 ${
+                    mode === m ? 'bg-[#14b8a6] text-[#0f172a] active:bg-[#5eead4]' : 'text-[#cbd5e1] hover:bg-white/5 active:bg-white/15'
+                  }`}
+                >
+                  <Icon className="size-5" aria-hidden />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         </div>
       )}
       {mode !== 'preview' && (
         <>
-          <div
-            className="grid shrink-0 grid-cols-4 gap-1 border-t border-[var(--app-line)] bg-[var(--bg-toolbar)] px-3 py-1"
-            role="toolbar"
-            aria-label="Pitch editor toolbar"
-          >
-            {MODES.map(({ mode: m, label, Icon }) => (
-              <button
-                key={m}
-                type="button"
-                aria-label={label}
-                aria-pressed={mode === m}
-                data-testid={`mode-${m}`}
-                onClick={() => changeMode(m)}
-                className={`flex h-11 touch-manipulation select-none flex-col items-center justify-center gap-0.5 rounded-[10px] text-[10px] font-medium transition-all duration-100 active:scale-95 ${
-                  mode === m ? 'bg-[#14b8a6] text-[#0f172a] active:bg-[#5eead4]' : 'text-[#cbd5e1] hover:bg-white/5 active:bg-white/15'
-                }`}
-              >
-                <Icon className="size-5" aria-hidden />
-                {label}
-              </button>
-            ))}
-          </div>
           <div className="shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2" data-testid="step-bar">
             <div className="flex items-center gap-1.5 overflow-x-auto" role="group" aria-label="Steps">
               {play?.steps.map((st, i) => (

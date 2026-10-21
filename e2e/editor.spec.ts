@@ -1,4 +1,7 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
+
+/** Select a player so the action toolbar appears. */
+const select = (page: Page, id: string) => page.getByTestId(`player-${id}`).click()
 
 test.describe('pitch editor', () => {
   test.beforeEach(async ({ page }) => {
@@ -16,12 +19,51 @@ test.describe('pitch editor', () => {
     await expect(svg.locator('[data-team="opp"] circle')).toHaveCount(11)
   })
 
-  test('toolbar mode buttons are visible', async ({ page }) => {
-    for (const name of ['Select', 'Pass', 'Run', 'Preview']) {
-      await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
-    }
-    await page.getByRole('button', { name: 'Pass', exact: true }).click()
-    await expect(page.getByTestId('mode-pass')).toHaveAttribute('aria-pressed', 'true')
+  test.describe('action toolbar', () => {
+    test('is hidden until a player is selected', async ({ page }) => {
+      await expect(page.getByTestId('player-toolbar')).toHaveCount(0)
+      await select(page, 'o-LCM')
+      const bar = page.getByTestId('player-toolbar')
+      await expect(bar).toBeVisible()
+      await expect(bar).toContainText('Selected: LCM')
+      for (const name of ['Move', 'Pass', 'Run']) {
+        await expect(bar.getByRole('button', { name, exact: true })).toBeVisible()
+      }
+      await page.getByTestId('mode-pass').click()
+      await expect(page.getByTestId('mode-pass')).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    test('tapping the selected player again hides it', async ({ page }) => {
+      await select(page, 'o-LCM')
+      await expect(page.getByTestId('player-toolbar')).toBeVisible()
+      await select(page, 'o-LCM')
+      await expect(page.getByTestId('player-toolbar')).toHaveCount(0)
+      await expect(page.getByTestId('selected-ring')).toHaveCount(0)
+    })
+
+    test('tapping the open pitch hides it', async ({ page }) => {
+      await select(page, 'o-LCM')
+      await page.getByTestId('pitch-svg').click({ position: { x: 5, y: 5 } })
+      await expect(page.getByTestId('player-toolbar')).toHaveCount(0)
+    })
+
+    test('Escape hides it', async ({ page }) => {
+      await select(page, 'o-LCM')
+      await expect(page.getByTestId('player-toolbar')).toBeVisible()
+      await page.keyboard.press('Escape')
+      await expect(page.getByTestId('player-toolbar')).toHaveCount(0)
+      await expect(page.getByTestId('selected-ring')).toHaveCount(0)
+    })
+
+    test('the X button deselects', async ({ page }) => {
+      await select(page, 'o-LCM')
+      await page.getByTestId('deselect').click()
+      await expect(page.getByTestId('player-toolbar')).toHaveCount(0)
+    })
+
+    test('the step bar stays available with nothing selected', async ({ page }) => {
+      await expect(page.getByRole('button', { name: 'Add Step', exact: true })).toBeVisible()
+    })
   })
 
   test('step chips: add a step and switch between steps', async ({ page }) => {
@@ -55,29 +97,29 @@ test.describe('pitch editor', () => {
   })
 
   test('pass tool adds a pass arrow', async ({ page }) => {
+    await select(page, 'o-LCM')
     await page.getByTestId('mode-pass').click()
-    await page.getByTestId('player-o-LCM').click()
-    await page.getByTestId('player-o-LST').click()
+    await select(page, 'o-LST')
     await expect(page.getByTestId('pass-arrow')).toHaveCount(1)
+    // the pass is done: back to a clean pitch
+    await expect(page.getByTestId('player-toolbar')).toHaveCount(0)
   })
 
   test('feedback: pass shows a confirmation and moves the ball to the receiver', async ({ page }) => {
     await expect(page.getByTestId('ball')).toHaveCount(0) // nobody has passed yet
+    await select(page, 'o-LCM')
     await page.getByTestId('mode-pass').click()
-    await page.getByTestId('player-o-LCM').click()
     await expect(page.getByTestId('pending-ring')).toBeVisible()
-    await page.getByTestId('player-o-LST').click()
+    await select(page, 'o-LST')
     await expect(page.getByTestId('action-flash')).toContainText('Pass added')
     await expect(page.getByTestId('ball')).toHaveCount(1)
     await expect(page.getByTestId('ball-chip')).toContainText('Ball: LST')
   })
 
-  test('feedback: tapping a player highlights it, tapping the pitch clears it', async ({ page }) => {
-    await page.getByTestId('player-o-LCM').click()
+  test('feedback: tapping a player highlights it', async ({ page }) => {
+    await select(page, 'o-LCM')
     await expect(page.getByTestId('selected-ring')).toHaveCount(1)
     await expect(page.getByTestId('player-o-LCM')).toHaveAttribute('data-selected', 'true')
-    await page.getByTestId('pitch-svg').click({ position: { x: 5, y: 5 } })
-    await expect(page.getByTestId('selected-ring')).toHaveCount(0)
   })
 
   test('feedback: adding a step confirms it', async ({ page }) => {
@@ -85,18 +127,57 @@ test.describe('pitch editor', () => {
     await expect(page.getByTestId('action-flash')).toContainText('added')
   })
 
-  test.describe('preview mode', () => {
-    test.beforeEach(async ({ page }) => {
-      await page.getByTestId('mode-preview').click()
+  test.describe('Edit / Play toggle', () => {
+    test('Edit is the default', async ({ page }) => {
+      await expect(page.getByTestId('view-edit')).toHaveAttribute('aria-pressed', 'true')
+      await expect(page.getByTestId('view-play')).toHaveAttribute('aria-pressed', 'false')
     })
 
-    test('Preview switches to the animated pitch', async ({ page }) => {
+    test('Play mode hides the toolbar and makes players unselectable', async ({ page }) => {
+      await select(page, 'o-LCM')
+      await expect(page.getByTestId('player-toolbar')).toBeVisible()
+      await page.getByTestId('view-play').click()
       await expect(page.getByTestId('animated-pitch')).toBeVisible()
       await expect(page.getByTestId('pitch-svg')).toHaveCount(0)
+      await expect(page.getByTestId('player-toolbar')).toHaveCount(0)
+      await expect(page.getByTestId('selected-ring')).toHaveCount(0)
+      await page.getByTestId('anim-player-o-LCM').click({ force: true })
+      await expect(page.getByTestId('player-toolbar')).toHaveCount(0)
+      await page.getByTestId('view-edit').click()
+      await expect(page.getByTestId('pitch-svg')).toBeVisible()
+      await expect(page.getByTestId('player-toolbar')).toHaveCount(0) // selection was dropped
+    })
+
+    test('Play mode starts from the current step', async ({ page }) => {
+      await page.getByRole('button', { name: 'Add Step', exact: true }).click()
+      await page.getByTestId('view-play').click()
+      await expect(page.getByTestId('anim-step-indicator')).toContainText('Step 2 of 2')
+    })
+  })
+
+  test.describe('play mode', () => {
+    test.beforeEach(async ({ page }) => {
+      await page.getByTestId('view-play').click()
+    })
+
+    test('shows the animated pitch with controls', async ({ page }) => {
+      await expect(page.getByTestId('animated-pitch')).toBeVisible()
       await expect(page.getByTestId('animated-pitch-svg').locator('[data-team="ours"] circle')).toHaveCount(11)
       await expect(page.getByTestId('anim-step-indicator')).toContainText('Step 1 of 1')
-      await page.getByTestId('mode-select').click()
+      await expect(page.getByTestId('reset')).toContainText('Restart')
+      await page.getByTestId('view-edit').click()
       await expect(page.getByTestId('pitch-svg')).toBeVisible()
+    })
+
+    test('speed control cycles 1x → 1.5x → 2x → 0.5x', async ({ page }) => {
+      const speed = page.getByTestId('speed')
+      await expect(speed).toContainText('1x')
+      await speed.click()
+      await expect(speed).toContainText('1.5x')
+      await speed.click()
+      await expect(speed).toContainText('2x')
+      await speed.click()
+      await expect(speed).toContainText('0.5x')
     })
 
     test('auto-plays, Pause stops it and Play resumes', async ({ page }) => {
@@ -117,31 +198,30 @@ test.describe('pitch editor', () => {
       await expect.poll(value).toBeGreaterThan(paused)
     })
 
-    test('scrubbing the progress bar and Reset', async ({ page }) => {
+    test('scrubbing the progress bar and Restart', async ({ page }) => {
       await page.getByTestId('play-toggle').click() // pause
       await page.getByTestId('progress-bar').fill('500')
       await expect(page.getByTestId('progress-bar')).toHaveValue('500')
       await page.getByTestId('reset').click()
       await expect(page.getByTestId('progress-bar')).toHaveValue('0')
     })
+  })
 
-    test('player moves along a run while playing', async ({ page }) => {
-      await page.getByTestId('mode-select').click()
-      await page.getByRole('button', { name: 'Add Step', exact: true }).click()
-      const lst = page.getByTestId('player-o-LST').locator('circle')
-      const box = (await lst.boundingBox())!
-      const cx = box.x + box.width / 2
-      const cy = box.y + box.height / 2
-      await page.mouse.move(cx, cy)
-      await page.mouse.down()
-      await page.mouse.move(cx + 60, cy - 120, { steps: 5 })
-      await page.mouse.up()
-      await page.getByTestId('mode-preview').click()
-      await page.getByTestId('play-toggle').click() // pause at start
-      const player = page.getByTestId('anim-player-o-LST').locator('circle')
-      const start = (await player.boundingBox())!
-      await page.getByTestId('progress-bar').fill('1000')
-      await expect.poll(async () => (await player.boundingBox())!.y).toBeLessThan(start.y - 40)
-    })
+  test('player moves along a run while playing', async ({ page }) => {
+    await page.getByRole('button', { name: 'Add Step', exact: true }).click()
+    const lst = page.getByTestId('player-o-LST').locator('circle')
+    const box = (await lst.boundingBox())!
+    const cx = box.x + box.width / 2
+    const cy = box.y + box.height / 2
+    await page.mouse.move(cx, cy)
+    await page.mouse.down()
+    await page.mouse.move(cx + 60, cy - 120, { steps: 5 })
+    await page.mouse.up()
+    await page.getByTestId('view-play').click()
+    await page.getByTestId('play-toggle').click() // pause at start
+    const player = page.getByTestId('anim-player-o-LST').locator('circle')
+    const start = (await player.boundingBox())!
+    await page.getByTestId('progress-bar').fill('1000')
+    await expect.poll(async () => (await player.boundingBox())!.y).toBeLessThan(start.y - 40)
   })
 })

@@ -6,7 +6,7 @@
  * @dataDependencies useAnimationEngine
  */
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { Play } from '@/lib/types/play'
 import { mToSvg } from '@/lib/engine/pitch'
 import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
@@ -26,6 +26,8 @@ interface AnimatedPitchProps {
   /** Render the playback bar in normal flow instead of fixed to the bottom of the phone frame. */
   inline?: boolean
 }
+
+const SPEEDS = [0.5, 1, 1.5, 2]
 
 type Pt = [number, number]
 const svg = (p: Pt) => mToSvg(p[0], p[1])
@@ -50,7 +52,8 @@ function trailPath(points: Pt[], progress: number): string {
 }
 
 export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, onExit, inline = false }: AnimatedPitchProps) {
-  const engine = useAnimationEngine(play, stepIndex)
+  const [speed, setSpeed] = useState(1)
+  const engine = useAnimationEngine(play, stepIndex, speed)
   const { frame, isPlaying, progress } = engine
   const startPlayback = engine.play
 
@@ -166,7 +169,11 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
             onClick={isPlaying ? engine.pause : engine.play}>
             {isPlaying ? '⏸' : '▶'}
           </Button>
-          <Button size="sm" variant="secondary" data-testid="reset" onClick={engine.reset}>Reset</Button>
+          <Button size="sm" variant="secondary" data-testid="reset" onClick={engine.reset}>Restart</Button>
+          <Button size="sm" variant="ghost" data-testid="speed" aria-label={`Playback speed ${speed}x`}
+            onClick={() => setSpeed((s) => SPEEDS[(SPEEDS.indexOf(s) + 1) % SPEEDS.length])}>
+            {speed}x
+          </Button>
           <div className="ml-auto flex items-center gap-1">
             <Button size="sm" variant="ghost" aria-label="Previous step" disabled={!onStepChange || stepIndex <= 0}
               onClick={() => onStepChange?.(stepIndex - 1)}>◀</Button>

@@ -14,3 +14,4 @@
 - v0.7.0 — feat: editor interaction feedback — press/hover states, selected + pending player rings, ball marker with holder ring and "Ball: X" chip, action confirmations, haptic vibration
 - v0.7.1 — fix: wire PitchEditor into /editor/[id] (was a "coming soon" placeholder); saving an existing play updates it instead of creating a copy
 - v0.7.2 — feat: MVP is editor-only — home play cards open /editor/[id] directly (shared viewer /play/[id] kept for share links)
+- v0.8.0 — feat: action toolbar (Move/Pass/Run) only appears once a player is selected (Escape, tap-again or tap-pitch dismisses); Edit | Play toggle in the header with playback speed 0.5x-2x

@@ -22,8 +22,10 @@ export interface AnimationEngine {
  * rAF playback loop for one step of a play. Pauses itself at the end of the
  * step (it never advances to the next one) and rewinds when the play or step changes.
  */
-export function useAnimationEngine(play: Play | null, stepIndex: number): AnimationEngine {
+export function useAnimationEngine(play: Play | null, stepIndex: number, speed = 1): AnimationEngine {
   const [progress, setProgress] = useState(0)
+  const speedRef = useRef(speed)
+  speedRef.current = speed
   const [isPlaying, setIsPlaying] = useState(false)
   const progressRef = useRef(0)
 
@@ -57,7 +59,7 @@ export function useAnimationEngine(play: Play | null, stepIndex: number): Animat
     const tick = (now: number) => {
       const dt = last === null ? 0 : (now - last) / 1000
       last = now
-      const next = Math.min(1, progressRef.current + dt / duration)
+      const next = Math.min(1, progressRef.current + (dt * speedRef.current) / duration)
       progressRef.current = next
       setProgress(next)
       if (next >= 1) {
