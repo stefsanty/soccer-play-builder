@@ -205,6 +205,19 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
             )
           })()}
 
+          {/* defensive-AI offside line: a faint marker at the back line of each AI team that has it on */}
+          {(['opp', 'ours'] as const).map((team) => {
+            const cfg = step.ai?.[team]
+            if (!cfg?.on || cfg.offsideLine === false) return null
+            const back = play.players.filter((p) => p.team === team && !/gk/i.test(p.label)).map((p) => P(p.id)?.y).filter((y): y is number => y !== undefined)
+            if (back.length === 0) return null
+            const y = pt(0, team === 'opp' ? Math.max(...back) : Math.min(...back)).y
+            return (
+              <line key={`ai-line-${team}`} data-testid={`ai-line-${team}`} x1={0} y1={y} x2={680} y2={y}
+                stroke="white" strokeOpacity={0.35} strokeWidth={2} strokeDasharray="4 8" pointerEvents="none" />
+            )
+          })}
+
           {/* offside line at the deepest outfield defender */}
           {step.offsideAnnotation && time >= step.offsideAnnotation.showFrom && time <= step.offsideAnnotation.showTo && (() => {
             const line = play.players

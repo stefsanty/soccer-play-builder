@@ -30,7 +30,59 @@ export interface MarkRule {
   dx?: number
 }
 
-export type DefenderRule = ZoneRule | MarkRule
+/** Region a follower is allowed to work in. */
+export type Bounds =
+  | { kind: 'rect'; x0: number; y0: number; x1: number; y1: number }
+  | { kind: 'circle'; c: [number, number]; r: number }
+
+/** Close down `att` at full pressure (gain 4.0): stand `gap` m goal-side of them, `dx` m across. */
+export interface PressRule {
+  type: 'press'
+  att: string
+  delay?: number
+  gap?: number   // default 1.0
+  dx?: number
+}
+
+/** Shadow `att` inside `bounds`; hand them over when they leave (see engine/follow.ts). */
+export interface FollowRule {
+  type: 'follow'
+  att: string
+  zone: [number, number]
+  bounds: Bounds
+  delay?: number
+  gap?: number   // goal-side offset, default 2.5
+  w?: number     // 0..1 blend zone -> attacker, default 0.85
+  dx?: number
+  /** Who picks the attacker up when they leave the bounds: nearest eligible ('auto'), nobody, or a given player. */
+  handoff?: 'auto' | 'none' | string
+}
+
+export type AiRole = 'auto' | 'presser' | 'cover' | 'line' | 'wide' | 'screen' | 'gk'
+
+/**
+ * Hand this player to the defensive AI (engine/ai.ts) from `delay`, optionally forcing a role.
+ * `x`, `y`, `gain` are filled in by the engine while the step plays.
+ */
+export interface AiRule {
+  type: 'ai'
+  delay?: number
+  role?: AiRole
+  x?: number
+  y?: number
+  gain?: number
+}
+
+export type DefenderRule = ZoneRule | MarkRule | PressRule | FollowRule | AiRule
+
+/** Defensive AI settings for one team in a step. */
+export interface AiConfig {
+  on: boolean
+  intensity?: 'low' | 'mid' | 'high'   // default 'mid'
+  offsideLine?: boolean                  // default true
+  reaction?: number                      // seconds before the AI engages; default 0.4
+  exclude?: string[]                     // player ids the AI must not touch
+}
 
 export interface PlayerMove {
   playerId: string
@@ -86,6 +138,7 @@ export interface OptionGroup {
 }
 
 export interface PlayStep {
+  ai?: { ours?: AiConfig; opp?: AiConfig }   // defensive AI per team
   id: string
   index: number
   title: string
