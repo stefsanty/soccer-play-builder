@@ -9,7 +9,7 @@ test.describe('home page', () => {
 
   test('has navigation links', async ({ page }) => {
     await page.goto('/')
-    await expect(page.getByRole('link', { name: '+ New Play' })).toHaveAttribute('href', '/editor')
+    await expect(page.getByRole('link', { name: '+ New Play' })).toHaveAttribute('href', '/new')
     await expect(page.getByText('No plays yet')).toBeVisible()
   })
 })
