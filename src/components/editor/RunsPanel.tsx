@@ -19,9 +19,11 @@ interface RunsBarProps {
   onSetAll: (hidden: boolean) => void
   onBehavior: () => void
   onSwitchToPlay?: () => void
+  /** When true, this is step 0 (setup): no runs or passes — show setup hint instead. */
+  isSetupStep?: boolean
 }
 
-export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior, onSwitchToPlay }: RunsBarProps) {
+export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior, onSwitchToPlay, isSetupStep }: RunsBarProps) {
   const hidden = moves.filter((m) => m.hidden).length
   const allHidden = moves.length > 0 && hidden === moves.length
   const playButton = onSwitchToPlay ? (
@@ -56,7 +58,14 @@ export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior, onSwi
       className="flex shrink-0 flex-col justify-center gap-1 border-t border-[var(--app-line)] bg-[var(--bg-toolbar)] px-3"
       style={{ height: BAR_HEIGHT }}
     >
-      {moves.length === 0 ? (
+      {isSetupStep ? (
+        <div className="flex items-center gap-2">
+          <p className="m-0 min-w-0 flex-1 text-xs leading-snug text-[var(--app-muted)]">
+            Setup step — drag players to set starting positions.
+          </p>
+          {playButton}
+        </div>
+      ) : moves.length === 0 ? (
         <div className="flex items-center gap-2">
           <p className="m-0 min-w-0 flex-1 text-xs leading-snug text-[var(--app-muted)]">
             No runs in this step. Tap a player, choose Run, then tap the pitch.

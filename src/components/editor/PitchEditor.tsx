@@ -31,7 +31,8 @@ interface PitchEditorProps {
 
 type Pos = { x: number; y: number }
 
-const MODES: { mode: EditorMode; label: string; Icon: LucideIcon }[] = [
+// All 3 modes available on steps 1+; step 0 (setup) only allows positioning — no passes or runs.
+const MODES: { mode: EditorMode; label: string; Icon: LucideIcon; setupOnly?: boolean }[] = [
   { mode: 'select', label: 'Move', Icon: Move },
   { mode: 'pass', label: 'Pass', Icon: MoveUpRight },
   { mode: 'run', label: 'Run', Icon: Zap },
@@ -149,6 +150,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
 
   const step = play?.steps[currentStepIndex]
   const canEdit = mode !== 'preview'
+  const isSetupStep = currentStepIndex === 0
 
   const labelOf = (id: string) => play?.players.find((p) => p.id === id)?.label ?? id
 
@@ -168,6 +170,8 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const goToStep = (i: number) => {
     if (i !== currentStepIndex) haptic(8)
     setCurrentStep(i)
+    // step 0 is setup-only: drop pass/run mode on entry
+    if (i === 0 && (mode === 'pass' || mode === 'run')) setMode('select')
   }
   const handleAddStep = () => {
     addStep()
@@ -181,6 +185,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     selectPlayer(id)
     haptic(8)
     if (mode === 'pass') {
+      if (isSetupStep) { clearSelection(); return }
       if (!pendingFrom) setPendingFrom(id)
       else if (pendingFrom === id) clearSelection() // tap the passer again to cancel
       else {
@@ -431,8 +436,8 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                 <X className="size-4" aria-hidden />
               </button>
             </div>
-            <div className="grid grid-cols-3 gap-1">
-              {MODES.map(({ mode: m, label, Icon }) => (
+            <div className={`grid gap-1 ${isSetupStep ? 'grid-cols-1' : 'grid-cols-3'}`}>
+              {MODES.filter((m) => !isSetupStep || m.mode === 'select').map(({ mode: m, label, Icon }) => (
                 <button
                   key={m}
                   type="button"
@@ -476,14 +481,16 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                   key={st.id}
                   type="button"
                   data-testid={`step-chip-${i}`}
-                  aria-label={`Step ${st.isAltBranch ? (st.altLabel ?? i) : i}`}
+                  aria-label={i === 0 ? 'Setup step' : `Step ${st.isAltBranch ? (st.altLabel ?? i) : i}`}
                   aria-current={i === currentStepIndex ? 'step' : undefined}
                   onClick={() => goToStep(i)}
-                  className={`h-9 min-w-9 shrink-0 touch-manipulation select-none rounded-full px-2 text-[13px] font-bold transition-all duration-100 active:scale-90 ${
+                  className={`h-9 shrink-0 touch-manipulation select-none rounded-full px-2.5 text-[13px] font-bold transition-all duration-100 active:scale-90 ${
+                    i === 0 ? 'min-w-14' : 'min-w-9'
+                  } ${
                     i === currentStepIndex ? 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]' : 'bg-[var(--app-chip)] text-[#e8edf2]'
                   } ${st.isAltBranch ? 'border border-dashed border-[#4cc9f0]' : ''}`}
                 >
-                  {st.isAltBranch ? (st.altLabel ?? i) : i}
+                  {i === 0 ? 'Setup' : st.isAltBranch ? (st.altLabel ?? i) : i}
                 </button>
               ))}
               <button type="button" aria-label="Add Step" onClick={handleAddStep}
@@ -500,6 +507,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
               onSetAll={(hidden) => setStepMovesHidden(currentStepIndex, hidden)}
               onBehavior={() => setBehaviorOpen(true)}
               onSwitchToPlay={() => { haptic(10); selectPlayer(null); setMode('preview') }}
+              isSetupStep={isSetupStep}
             />
           )}
         </>

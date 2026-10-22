@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import type { AiConfig, Play, PlayStep, PlayerMove, PassAnimation } from '@/lib/types/play'
+import { applyFormation, type FormationKey } from '@/lib/engine/formations'
 
 export type EditorMode =
   | 'select'        // click to select player
@@ -36,6 +37,8 @@ interface EditorState {
   toggleMoveHidden: (playerId: string, stepIndex: number) => void
   /** Hide or show every move arrow of a step. */
   setStepMovesHidden: (stepIndex: number, hidden: boolean) => void
+  /** Reposition all players of `team` to `formation` standard coordinates. */
+  applyFormation: (team: 'ours' | 'opp', formation: FormationKey) => void
   setShowFormation: (v: boolean) => void
   setIsPlaying: (v: boolean) => void
   setPreviewTime: (t: number) => void
@@ -130,6 +133,11 @@ export const useEditorStore = create<EditorState>()(
         if (hidden) m.hidden = true
         else delete m.hidden
       }
+      s.isDirty = true
+    }),
+    applyFormation: (team, formation) => set((s) => {
+      if (!s.play) return
+      s.play.players = applyFormation(s.play.players, team, formation)
       s.isDirty = true
     }),
     setShowFormation: (v) => set((s) => { s.showFormation = v }),
