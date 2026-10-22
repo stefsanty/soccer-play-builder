@@ -575,19 +575,31 @@ export function computeAiTargets(
     // An opponent near a player's zone draws him in, harder the closer he is, and he aims to end up goal-side
     // — between that man and the goal. This is what keeps a full-back with a winger who has stayed wide, and
     // it is weighed against his slot and his neighbours rather than overriding them.
+    // Whoever is already covering an opponent is not to be joined: a man with two defenders on him is one
+    // defender wasted, and somewhere else an attacker is free. A pressing team-mate does not count as cover —
+    // he is going to the ball, not standing with anyone.
+    const coverers = own.filter((q) => !isGk(q) && role.get(q.id) !== 'presser' && role.get(q.id) !== 'cover')
     const gravity = (p: AiWorldPlayer): { at: XY; w: number } | null => {
       const s = slot.get(p.id)!
-      let best: AiWorldPlayer | undefined
-      let bestD = Infinity
+      let bestAt: XY | null = null
+      let bestW = 0
       for (const a of foes) {
         const d = dist(s, [a.x, a.y])
-        if (d < bestD) {
-          bestD = d
-          best = a
+        if (d >= GRAVITY_R) continue
+        if (own.some((q) => q.id !== p.id && q.duty?.att === a.id)) continue // a team-mate is assigned to him
+        // How free is he? Measured against me: if a team-mate is nearer him than I am the pull fades away, and
+        // if that team-mate is right on top of him it vanishes. Judging it relative to my own distance is also
+        // what settles who takes him — the closer man keeps his claim, the further one goes elsewhere.
+        const nearestOther = Math.min(Infinity, ...coverers.filter((q) => q.id !== p.id).map((q) => dist([q.x, q.y], [a.x, a.y])))
+        const free = clamp(nearestOther / Math.max(d, 1), 0, 1)
+        const w = W.gravity * (1 - d / GRAVITY_R) * free
+        // the strongest claim wins, so he is drawn to the free man rather than the best-covered one
+        if (w > bestW) {
+          bestW = w
+          bestAt = [a.x, clamp(a.y + goalDir * GRAVITY_GAP, 0, PITCH_H)]
         }
       }
-      if (!best || bestD >= GRAVITY_R) return null
-      return { at: [best.x, clamp(best.y + goalDir * GRAVITY_GAP, 0, PITCH_H)], w: W.gravity * (1 - bestD / GRAVITY_R) }
+      return bestAt ? { at: bestAt, w: bestW } : null
     }
 
     for (let pass = 0; pass < SOLVE_PASSES; pass++) {

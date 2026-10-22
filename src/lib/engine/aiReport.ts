@@ -63,21 +63,29 @@ export interface RoleRow {
   worst: string
 }
 
+/** Two defenders inside this of the same opponent are both covering him — one of them is wasted. */
+export const DOUBLE_MARK_R = 6
+
 export interface AiReport {
   roles: RoleRow[]
   lanes: { assigned: number; onLane: number }
   cohesion: { worstOverstretch: number; worstPair: string }
+  /** How often two shape-holding defenders end up on the same opponent, and how many opponents nobody is near. */
+  marking: { doubled: number; samples: number; unmarkedMean: number }
   width: { width: number; openWing: number; openWingVsWideAttacker: number; nearestToWideAttacker: number }[]
   phase1: { outlets: number; cut: number; cutters: string[]; backLineSpread: number }
 }
 
 /** Walks the seeded play's four defending steps frame by frame, which is as close to real use as a test gets. */
-function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: AiReport['cohesion'] } {
+function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: AiReport['cohesion']; marking: AiReport['marking'] } {
   const acc = new Map<string, { n: number; drift: number[]; off: number[]; worst: string }>()
   let assigned = 0
   let onLane = 0
   let worstOverstretch = 0
   let worstPair = '-'
+  let doubled = 0
+  let samples = 0
+  let unmarkedTotal = 0
 
   for (const stepIdx of [0, 1, 2, 3]) {
     const tl = getTimeline(play, stepIdx)
@@ -126,6 +134,20 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
           }
         }
       }
+
+      // How the opposition is covered: an opponent with two shape-holding defenders on him is one defender
+      // wasted, and somewhere else a man is free. Counted per frame over the attacking side's outfielders.
+      const holders = Object.entries(full)
+        .filter(([, v]) => ['line', 'wide', 'screen'].includes(v.role))
+        .map(([, v]) => v)
+      let unmarked = 0
+      for (const a of players.filter((q) => q.team === 'ours' && !/gk/i.test(q.label))) {
+        const on = holders.filter((v) => Math.hypot(v.x - a.x, v.y - a.y) <= DOUBLE_MARK_R).length
+        if (on === 0) unmarked++
+        if (on >= 2) doubled++
+      }
+      samples++
+      unmarkedTotal += unmarked
     }
   }
 
@@ -142,7 +164,12 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
     }))
     .sort((a, b) => a.key.localeCompare(b.key))
 
-  return { roles, lanes: { assigned, onLane }, cohesion: { worstOverstretch, worstPair } }
+  return {
+    roles,
+    lanes: { assigned, onLane },
+    cohesion: { worstOverstretch, worstPair },
+    marking: { doubled, samples, unmarkedMean: samples ? unmarkedTotal / samples : 0 },
+  }
 }
 
 /** How much of the far touchline nobody is standing in — the space a switch of play would find. */
@@ -184,8 +211,8 @@ function phase1(): AiReport['phase1'] {
 }
 
 export function aiReport(): AiReport {
-  const { roles, lanes, cohesion } = roleCensus()
-  return { roles, lanes, cohesion, width: widthSweep(), phase1: phase1() }
+  const { roles, lanes, cohesion, marking } = roleCensus()
+  return { roles, lanes, cohesion, marking, width: widthSweep(), phase1: phase1() }
 }
 
 /** The report as lines of text, for `npm run ai:report`. */
@@ -202,6 +229,10 @@ export function formatAiReport(r: AiReport = aiReport()): string[] {
   out.push('')
   out.push(`LANES  ${r.lanes.onLane}/${r.lanes.assigned} cutters actually standing on the pass they were given`)
   out.push(`COHESION  worst overstretch past formation spacing + ${NEIGHBOUR_SLACK} m slack: ${r.cohesion.worstOverstretch.toFixed(1)} m (${r.cohesion.worstPair})`)
+  out.push(
+    `MARKING  ${r.marking.doubled} opponents double-covered within ${DOUBLE_MARK_R} m over ${r.marking.samples} frames ` +
+      `(${(r.marking.doubled / r.marking.samples).toFixed(2)} per frame); ${r.marking.unmarkedMean.toFixed(1)} opponents with nobody near them`,
+  )
   out.push('')
   out.push('WIDTH  ball on the left touchline; "open wing" is the far-side space a long diagonal would find')
   out.push('  width   openWing   openWing(vs wide attacker)   nearest defender to him')

@@ -1015,3 +1015,42 @@ describe('the AI inside the simulation (seeded "Defensive AI test")', () => {
     expect(mk('RB', 3, 0.7, [63, 55], 1, 0)).toMatchObject({ type: 'mark', attacker: 'RB', weight: 0.7, dx: 0 })
   })
 })
+
+describe('gravity: an opponent already covered does not pull a second defender', () => {
+  /** One attacker in a defender's zone, and a team-mate who is either on him or away on the far side. */
+  const scene = (coverAt: [number, number]) => {
+    const players: AiWorldPlayer[] = [
+      { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 100, home: [34, 100] },
+      { id: 'oD1', team: 'opp', label: 'oD1', x: coverAt[0], y: coverAt[1], home: [54, 78] },
+      { id: 'oD2', team: 'opp', label: 'oD2', x: 44, y: 78, home: [44, 78] },
+      { id: 'C', team: 'ours', label: 'C', x: 34, y: 50, home: [34, 50] },
+      { id: 'A', team: 'ours', label: 'A', x: 54, y: 74, home: [54, 74] },
+    ]
+    const w: AiWorld = { players, ball: { x: 34, y: 50 }, memory: {}, owner: 'ours', focus: 'C' }
+    return computeAiTargets(w, 'opp', emptyStep, ON)
+  }
+
+  it('is drawn across to him when nobody else is near him', () => {
+    const t = scene([10, 78]) // oD1 is away on the other flank
+    expect(t.oD2.role).toBe('line')
+    expect(t.oD2.x).toBeGreaterThan(47) // comes off his slot at 44 towards A at 54
+  })
+
+  it('holds his own position when a team-mate is already on him', () => {
+    const t = scene([54, 75]) // oD1 is a metre from A
+    expect(t.oD2.role).toBe('line')
+    expect(Math.abs(t.oD2.x - 44)).toBeLessThan(1.5) // stays in his slot: A is not his man
+  })
+
+  it('an authored marker counts as cover too, however far off he currently is', () => {
+    const players: AiWorldPlayer[] = [
+      { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 100, home: [34, 100] },
+      { id: 'oD1', team: 'opp', label: 'oD1', x: 10, y: 78, home: [54, 78], duty: { type: 'mark', att: 'A' } },
+      { id: 'oD2', team: 'opp', label: 'oD2', x: 44, y: 78, home: [44, 78] },
+      { id: 'C', team: 'ours', label: 'C', x: 34, y: 50, home: [34, 50] },
+      { id: 'A', team: 'ours', label: 'A', x: 54, y: 74, home: [54, 74] },
+    ]
+    const t = computeAiTargets({ players, ball: { x: 34, y: 50 }, memory: {}, owner: 'ours', focus: 'C' }, 'opp', emptyStep, ON)
+    expect(Math.abs(t.oD2.x - 44)).toBeLessThan(1.5)
+  })
+})
