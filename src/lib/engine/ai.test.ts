@@ -239,10 +239,13 @@ describe('computeAiTargets', () => {
     })
 
     it('separation scales with width: wider setting → larger minimum gap', () => {
+      // Stacked off centre on purpose: a slot within CENTRAL_OFF of the middle is pinned to its own x +/- 3 m,
+      // and two players sharing one central home therefore cannot be spread further than 6 m whatever the
+      // width says. The pin is the harder rule of the two — this test is about the width scaling under it.
       const players: AiWorldPlayer[] = [
         { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 99, home: [34, 99] },
-        { id: 'oLCB', team: 'opp', label: 'oLCB', x: 34, y: 70, home: [34, 70] },
-        { id: 'oRCB', team: 'opp', label: 'oRCB', x: 34, y: 70, home: [34, 70] },
+        { id: 'oLCB', team: 'opp', label: 'oLCB', x: 20, y: 70, home: [20, 70] },
+        { id: 'oRCB', team: 'opp', label: 'oRCB', x: 20, y: 70, home: [20, 70] },
       ]
       const w: AiWorld = { players, ball: { x: 34, y: 30 }, memory: {} }
       const narrow = computeAiTargets(w, 'opp', emptyStep, { on: true, width: 10 })

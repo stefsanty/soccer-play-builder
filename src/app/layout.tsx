@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { VersionBadge } from "@/components/layout/VersionBadge";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -31,6 +32,7 @@ export default function RootLayout({
         <div className="flex min-h-dvh justify-center bg-[var(--bg-base)]">
           <div className="relative flex min-h-dvh w-full max-w-[390px] flex-col bg-[var(--bg-base)] sm:border-x sm:border-slate-800">
             {children}
+            <VersionBadge />
           </div>
         </div>
       </body>

@@ -652,14 +652,17 @@ export function computeAiTargets(
 
   // ---- separation: keep AI-driven block players from clustering ----
   // Runs before the no-gaps pass, which has the final word on spacing inside a line, and before the offside
-  // line, whose Y correction re-pins the back line to one height. Presser / cover / screen have specific
-  // tactical targets and are exempt.
+  // line, whose Y correction re-pins the back line to one height.
+  //
+  // A lane cutter IS included: he used to be exempt, from when his target floated free and pushing him would
+  // have taken him off his job. It no longer does — confine() puts him back on his lane — so he gives way like
+  // anyone else and merely slides along the pass he is cutting. Leaving him out was letting a cutter and a
+  // block player whose slot sat on the same spot stand a metre apart, which reads as two men marking one.
+  // The presser and his cover stay exempt: they are going to the ball.
   {
-    const xLo = 3 + P.widthInward
-    const xHi = PITCH_W - 3 - P.widthInward
     const sepExempt = (p: AiWorldPlayer): boolean => {
       const r = role.get(p.id)
-      if (r === 'presser' || r === 'cover' || r === 'screen') return true
+      if (r === 'presser' || r === 'cover') return true
       const d = p.duty?.type
       return d === 'press' || d === 'mark' || d === 'follow'
     }
@@ -692,8 +695,10 @@ export function computeAiTargets(
             ny = dy / d
           }
           const push = (minSep - d) / 2
-          target.set(sepField[i].id, [clamp(ti[0] - nx * push, xLo, xHi), clamp(ti[1] - ny * push, 3, PITCH_H - 3)])
-          target.set(sepField[j].id, [clamp(tj[0] + nx * push, xLo, xHi), clamp(tj[1] + ny * push, 3, PITCH_H - 3)])
+          // confine() re-applies each man's own limits, so a cutter pushed off his lane comes straight back
+          // onto it and the give-way turns into a slide along the pass
+          target.set(sepField[i].id, confine(sepField[i], [ti[0] - nx * push, ti[1] - ny * push]))
+          target.set(sepField[j].id, confine(sepField[j], [tj[0] + nx * push, tj[1] + ny * push]))
           moved = true
         }
       }
