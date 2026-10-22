@@ -409,20 +409,27 @@ export function computeAiTargets(
         const bx = block.get(p.id)![0]
         for (const a of foes) if (dist([bx, lineY], [a.x, a.y]) <= HANDOFF_R) onTheLine.add(a.id)
       }
-      const screeners = field.filter((p) => !pulled.has(p.id) && lineOf.get(p.id) !== defIdx && forced[p.id] !== 'wide')
-      for (const m of [...screeners].sort((a, b) => dist([a.x, a.y], [ball.x, ball.y]) - dist([b.x, b.y], [ball.x, ball.y]))) {
+      /** May `m` be the one to cut the pass to `a`? Pure geometry: his band of the pitch, his flank, a real
+       *  pass, and a lane nobody is covering already. */
+      const canCut = (m: AiWorldPlayer, a: AiWorldPlayer): boolean => {
         const mHome = depthOf(m.home[1])
-        const lo = Math.min(dBall, mHome)
-        const hi = Math.max(dBall, mHome)
+        const aDepth = depthOf(a.y)
+        if (aDepth <= Math.min(dBall, mHome) || aDepth >= Math.max(dBall, mHome)) return false // between ball and slot
+        if (dist([a.x, a.y], [ball.x, ball.y]) < MIN_LANE) return false // a real pass, not the carrier's feet
+        if (Math.abs(m.home[0] - CENTRE_X) >= 10 && Math.abs(a.x - m.home[0]) > WIDE_LANE_REACH) return false // holds his flank
         const blockers = field.filter((d) => d.id !== m.id && !pulled.has(d.id)).map((d): XY => [d.x, d.y])
-        const wide = Math.abs(m.home[0] - CENTRE_X) >= 10
-        const open = foes
-          .filter((a) => a !== carrier && !taken.has(a.id) && !onJob.has(a.id) && !onTheLine.has(a.id))
-          .filter((a) => depthOf(a.y) > lo && depthOf(a.y) < hi) // between the ball and his own zone
-          .filter((a) => dist([a.x, a.y], [ball.x, ball.y]) >= MIN_LANE) // a real pass, not the carrier's feet
-          .filter((a) => !wide || Math.abs(a.x - m.home[0]) <= WIDE_LANE_REACH) // a wide man holds his flank
-          .filter((a) => passingLaneOpen([ball.x, ball.y], [a.x, a.y], blockers))
-          .sort((a, b) => dist(m.home, [a.x, a.y]) - dist(m.home, [b.x, b.y]))[0] // nearest his own zone first
+        return passingLaneOpen([ball.x, ball.y], [a.x, a.y], blockers)
+      }
+
+      const screeners = field.filter((p) => !pulled.has(p.id) && lineOf.get(p.id) !== defIdx && forced[p.id] !== 'wide')
+      const free = foes.filter((a) => a !== carrier && !onJob.has(a.id) && !onTheLine.has(a.id))
+      // Nearest the ball chooses first, and each takes the open lane nearest his own slot. That leaves no pair
+      // of cutters each wanting the other's lane: whoever chose first took the best lane open to him, so he
+      // never gains by trading, and a lane he would have preferred is one he could not legally cut anyway.
+      for (const m of [...screeners].sort((a, b) => dist([a.x, a.y], [ball.x, ball.y]) - dist([b.x, b.y], [ball.x, ball.y]))) {
+        const open = free
+          .filter((a) => !taken.has(a.id) && canCut(m, a))
+          .sort((a, b) => dist(m.home, [a.x, a.y]) - dist(m.home, [b.x, b.y]))[0]
         if (!open) continue
         taken.add(open.id)
         target.set(m.id, [clamp((ball.x + open.x) / 2, 2, PITCH_W - 2), clamp((ball.y + open.y) / 2 + goalDir * 1, 0, PITCH_H)])

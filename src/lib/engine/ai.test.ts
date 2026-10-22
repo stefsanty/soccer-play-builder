@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AiWorld, GAIN, INTENSITY, LANE_BLOCK_R, MIN_LANE, PRESETS, blendedLineDepth, blockShift, computeAiTargets, distPointToSegment, lineDepth, passingLaneOpen, resolveAiParams, type AiWorldPlayer, type XY } from '@/lib/engine/ai'
+import { AiWorld, GAIN, INTENSITY, LANE_BLOCK_R, MIN_LANE, PRESETS, WIDE_LANE_REACH, blendedLineDepth, blockShift, computeAiTargets, distPointToSegment, lineDepth, passingLaneOpen, resolveAiParams, type AiWorldPlayer, type XY } from '@/lib/engine/ai'
 import { EXIT_MARGIN, HANDOFF_COOLDOWN, clampIntoBounds, contains, handoffCost, newFollowTrack, pickHandoff, trackExit } from '@/lib/engine/follow'
 import { H, getTimeline, sampleTimeline } from '@/lib/engine/simulator'
 import { ai, fl, mk, pr, zn } from '@/lib/engine/rules'
@@ -422,57 +422,163 @@ describe('pressing: one presser, and the block keeps its shape behind him', () =
     // he is goal-side of the press (OPP defend y = 105) and no more than COVER_REACH off his own home x
     expect(cover.y).toBeGreaterThan(presser.y)
     expect(Math.abs(cover.x - homeOf(w, coverId)[0])).toBeLessThanOrEqual(8 + DEFAULTS.shiftMax + 1e-9)
-    // and a wide player is never the one dragged in to do it
-    expect(['oLW', 'oRW', 'oLB', 'oRB']).not.toContain(coverId)
+    // and the job falls to a central slot, not to a player who would have to vacate a flank for it
+    expect(Math.abs(homeOf(w, coverId)[0] - 34)).toBeLessThan(18)
   })
 })
 
-describe('lane cutters: phase 1 of the test play — oST presses the blue LCB', () => {
-  const phase1 = () => {
-    const w = world({ x: 26, y: 25 }, { owner: 'ours', focus: 'LCB' })
-    return { w, t: computeAiTargets(w, 'opp', emptyStep, ON) }
+// The engine names no player: who cuts which lane falls out of the geometry (an open lane, the depth window
+// between ball and own slot, the nearest zone, the player's own flank). These helpers re-derive the assignment
+// from the targets so a test can check that RULE on any shape, instead of pinning one worked example's pairing.
+
+/** The opponent a cutter was sent to screen, read back out of its target (which is the lane's midpoint). */
+function receiverOf(v: { x: number; y: number }, ball: { x: number; y: number }, goalDir: number, foes: AiWorldPlayer[]) {
+  const rx = 2 * v.x - ball.x
+  const ry = 2 * (v.y - goalDir) - ball.y
+  return foes.find((f) => Math.hypot(f.x - rx, f.y - ry) < 1e-6) ?? null
+}
+
+/** Check the lane-cutting rule itself against whatever shape `w` holds. */
+function auditLanes(w: AiWorld, team: 'ours' | 'opp', cfg: Parameters<typeof computeAiTargets>[3] = ON) {
+  const t = computeAiTargets(w, team, emptyStep, cfg)
+  const ball = w.ball!
+  const goalDir = team === 'opp' ? 1 : -1
+  const foes = w.players.filter((p) => p.team !== team)
+  const cut = Object.entries(t)
+    .filter(([, v]) => v.role === 'screen')
+    .map(([id, v]) => {
+      const recv = receiverOf(v, ball, goalDir, foes)
+      expect(recv, `cutter ${id} is not standing on a lane to any opponent`).not.toBeNull()
+      return { id, home: w.players.find((p) => p.id === id)!.home, recv: recv! }
+    })
+
+  expect(new Set(cut.map((c) => c.recv.id)).size, 'two cutters on one opponent').toBe(cut.length)
+  const gap = (h: XY, p: { x: number; y: number }) => Math.hypot(h[0] - p.x, h[1] - p.y)
+  for (const c of cut) {
+    expect(c.id, 'a cutter is screening a pass too short to be a pass').toBeTruthy()
+    expect(gap([ball.x, ball.y], c.recv)).toBeGreaterThanOrEqual(MIN_LANE)
+    // a player whose slot is off centre cuts inside his own flank rather than vacating it
+    if (Math.abs(c.home[0] - 34) >= 10) expect(Math.abs(c.recv.x - c.home[0])).toBeLessThanOrEqual(WIDE_LANE_REACH)
   }
-  /** The lane cutter's target is the midpoint of ball -> receiver, nudged 1 m goal-side. */
-  const laneMid = (recv: [number, number]): [number, number] => [(26 + recv[0]) / 2, (25 + recv[1]) / 2 + 1]
-  const near = (v: { x: number; y: number }, p: [number, number]) => Math.hypot(v.x - p[0], v.y - p[1]) < 1e-6
-
-  it('oST is the presser and the only player who goes to the ball', () => {
-    const { t } = phase1()
-    expect(t.oST.role).toBe('presser')
-    expect(t.oST.gain).toBe(GAIN.press)
-    expect(Math.hypot(t.oST.x - 26, t.oST.y - 25)).toBeLessThan(2)
-  })
-
-  it('all three central outlets out of LCB are cut, each by the midfielder nearest that lane', () => {
-    const { t } = phase1()
-    const cutters = Object.entries(t).filter(([, v]) => v.role === 'screen')
-    expect(cutters.map(([id]) => id).sort()).toEqual(['oCAM', 'oCML', 'oCMR'])
-    // LCM (22,45), CM (34,48) and RCM (52,45) each have a cutter stepping onto their lane
-    for (const recv of [[22, 45], [34, 48], [52, 45]] as [number, number][]) {
-      expect(cutters.some(([, v]) => near(v, laneMid(recv)))).toBe(true)
+  // The assignment is settled: no two cutters who COULD trade lanes would both rather do so. A trade the rule
+  // forbids is not a defect, so the two stated limits — cut inside your own band, hold your own flank — are
+  // applied here too before a pair is judged.
+  const depth = (y: number) => (team === 'opp' ? 105 - y : y)
+  const canTake = (home: XY, recv: { x: number; y: number }) => {
+    const lo = Math.min(depth(ball.y), depth(home[1]))
+    const hi = Math.max(depth(ball.y), depth(home[1]))
+    if (depth(recv.y) <= lo || depth(recv.y) >= hi) return false
+    return Math.abs(home[0] - 34) < 10 || Math.abs(recv.x - home[0]) <= WIDE_LANE_REACH
+  }
+  for (const a of cut) {
+    for (const b of cut) {
+      if (a.id >= b.id) continue
+      if (!canTake(a.home, b.recv) || !canTake(b.home, a.recv)) continue
+      const better = gap(a.home, b.recv) < gap(a.home, a.recv) - 1e-9 && gap(b.home, a.recv) < gap(b.home, b.recv) - 1e-9
+      expect(better, `${a.id} and ${b.id} would both rather swap lanes`).toBe(false)
     }
-    // each takes the lane nearest his own zone: oCMR (home x 16) -> LCM, oCAM (34) -> CM, oCML (46) -> RCM
-    expect(near(t.oCMR, laneMid([22, 45]))).toBe(true)
-    expect(near(t.oCAM, laneMid([34, 48]))).toBe(true)
-    expect(near(t.oCML, laneMid([52, 45]))).toBe(true)
-    for (const id of ['oCML', 'oCMR', 'oCAM']) expect(t[id].gain).toBe(GAIN.screen)
+  }
+  return { t, cut }
+}
+
+describe('lane cutters: the rule, on the test play phase 1 (a press on the blue LCB)', () => {
+  const phase1 = () => world({ x: 26, y: 25 }, { owner: 'ours', focus: 'LCB' })
+
+  it('one player goes to the ball — the closest, whoever that turns out to be', () => {
+    const w = phase1()
+    const { t } = auditLanes(w, 'opp')
+    const pressers = Object.entries(t).filter(([, v]) => v.role === 'presser')
+    expect(pressers).toHaveLength(1)
+    const d = (p: AiWorldPlayer) => Math.hypot(p.x - 26, p.y - 25)
+    const closest = w.players.filter((p) => p.team === 'opp' && !/gk/i.test(p.label)).sort((a, b) => d(a) - d(b))[0]
+    expect(pressers[0][0]).toBe(closest.id)
+    expect(pressers[0][1].gain).toBe(GAIN.press)
+    expect(Math.hypot(pressers[0][1].x - 26, pressers[0][1].y - 25)).toBeLessThan(2)
   })
 
-  it('the wingers hold their flanks instead of dropping into midfield', () => {
-    const { w, t } = phase1()
-    for (const id of ['oLW', 'oRW']) {
-      expect(t[id].role).toBe('wide')
-      expect(Math.abs(t[id].x - homeOf(w, id)[0])).toBeLessThanOrEqual(DEFAULTS.shiftMax + 1e-9)
+  it('every central outlet out of the carrier is cut, and each cutter has the lane nearest its own slot', () => {
+    const { cut } = auditLanes(phase1(), 'opp')
+    // the three midfield outlets (22,45) (34,48) (52,45) are all covered — by position, not by shirt
+    const covered = cut.map((c) => [c.recv.x, c.recv.y].join())
+    for (const recv of [[22, 45], [34, 48], [52, 45]]) expect(covered).toContain(recv.join())
+    // and each cutter really did take its own nearest available lane (auditLanes proves the swap-stability)
+    expect(cut).toHaveLength(3)
+  })
+
+  it('players whose slot is out wide keep it instead of dropping into midfield', () => {
+    const w = phase1()
+    const { t } = auditLanes(w, 'opp')
+    // the two widest slots ahead of the back line, derived from the shape rather than named
+    const wideSlots = w.players
+      .filter((p) => p.team === 'opp' && !/gk/i.test(p.label) && p.home[1] < 70)
+      .sort((a, b) => Math.abs(b.home[0] - 34) - Math.abs(a.home[0] - 34))
+      .slice(0, 2)
+    expect(wideSlots).toHaveLength(2)
+    for (const p of wideSlots) {
+      expect(t[p.id].role).toBe('wide')
+      expect(Math.abs(t[p.id].x - p.home[0])).toBeLessThanOrEqual(DEFAULTS.shiftMax + 1e-9)
     }
   })
 
   it('the back line steps up together and holds one height', () => {
-    const { w, t } = phase1()
-    const back = ['oLB', 'oLCB', 'oRCB', 'oRB']
+    const w = phase1()
+    const { t } = auditLanes(w, 'opp')
+    // the back line is whichever outfield slots are deepest, not a hardcoded list
+    const back = w.players
+      .filter((p) => p.team === 'opp' && !/gk/i.test(p.label) && p.home[1] >= 78)
+      .map((p) => p.id)
+    expect(back).toHaveLength(4)
     const ys = back.map((id) => t[id].y)
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(1e-9) // one height, cover included
     for (const id of back) expect(t[id].y).toBeLessThan(homeOf(w, id)[1] - 8) // stepped up (OPP: towards y = 0)
     expect(ys[0]).toBeCloseTo(105 - blendedLineDepth(80, DEFAULTS), 6)
+  })
+})
+
+describe('lane cutters: the same rule on shapes and ball positions it was never tuned on', () => {
+  /** A 3-4-3 OPP block — nothing like the seed's 4-3-3 — plus an attack to cut lanes against. */
+  const threeFourThree = (ball: { x: number; y: number }, focus: string): AiWorld => {
+    const opp: [string, number, number][] = [
+      ['oGK', 34, 100], ['oDL', 48, 84], ['oDC', 34, 84], ['oDR', 20, 84],
+      ['oML', 58, 64], ['oMCL', 40, 62], ['oMCR', 28, 62], ['oMR', 10, 64],
+      ['oFL', 48, 40], ['oFC', 34, 38], ['oFR', 20, 40],
+    ]
+    const ours: [string, number, number][] = [
+      ['GK', 34, 5], ['DL', 12, 22], ['DCL', 28, 24], ['DCR', 44, 24], ['DR', 58, 22],
+      ['ML', 16, 48], ['MC', 34, 50], ['MR', 54, 48], ['FL', 18, 72], ['FC', 34, 74], ['FR', 52, 72],
+    ]
+    const players: AiWorldPlayer[] = [
+      ...opp.map(([id, x, y]) => ({ id, team: 'opp' as const, label: id, x, y, home: [x, y] as XY })),
+      ...ours.map(([id, x, y]) => ({ id, team: 'ours' as const, label: id, x, y, home: [x, y] as XY })),
+    ]
+    return { players, ball, memory: {}, owner: 'ours', focus }
+  }
+
+  it('holds for a 3-4-3 block, wherever the ball is', () => {
+    for (const [id, bx, by] of [['DCL', 28, 24], ['DR', 58, 22], ['MC', 34, 50], ['ML', 16, 48], ['DL', 12, 22]] as const) {
+      const { cut } = auditLanes(threeFourThree({ x: bx, y: by }, id), 'opp')
+      expect(cut.length, `no lane was cut with the ball at ${id}`).toBeGreaterThan(0)
+    }
+  })
+
+  it('holds for the seeded shape across the pitch, both teams, and every aggressiveness that cuts lanes', () => {
+    for (const by of [18, 34, 50, 66, 82]) {
+      for (const bx of [10, 26, 42, 58]) {
+        for (const aggressiveness of [50, 75, 100]) {
+          for (const team of ['opp', 'ours'] as const) {
+            auditLanes(world({ x: bx, y: by }, { owner: team === 'opp' ? 'ours' : 'opp' }), team, { on: true, aggressiveness })
+          }
+        }
+      }
+    }
+  })
+
+  it('moving the ball across the pitch moves the cutting to the new outlets', () => {
+    const left = auditLanes(world({ x: 26, y: 25 }, { owner: 'ours', focus: 'LCB' }), 'opp').cut
+    const right = auditLanes(world({ x: 46, y: 25 }, { owner: 'ours', focus: 'RCB' }), 'opp').cut
+    // the same rule, a different carrier: the lanes cut are not the same set
+    const key = (c: { recv: { x: number; y: number } }) => [c.recv.x, c.recv.y].join()
+    expect(left.map(key).sort()).not.toEqual(right.map(key).sort())
   })
 })
 
