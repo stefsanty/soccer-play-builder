@@ -79,8 +79,9 @@ describe('computeAiTargets', () => {
     expect(shiftX).toBeLessThan(-3)
     // wide players on the ball side take the full shift, far side tucks in even more
     expect(t.oLB.x).toBeLessThan(homeOf(w, 'oLB')[0] - 3)
-    // oRB (home x = 8) is on the ball side already: held at the width limit, 3 m + the default inward 6 m
-    expect(t.oRB.x).toBeCloseTo(3 + DEFAULTS.widthInward, 6)
+    // oRW (home x = 8) is on the ball side already: held at the width limit, 3 m + the default inward 6 m
+    // (oRB is pulled as cover for the presser — oRW is the ball-side wide player remaining in the block)
+    expect(t.oRW.x).toBeCloseTo(3 + DEFAULTS.widthInward, 6)
     expect(t.oRCB.x).toBeLessThan(homeOf(w, 'oRCB')[0] - 3)
     // central players stay central: at most 3 m from home
     // (a player picked as presser / cover / lane screen is placed by that job instead of by the block)
@@ -129,7 +130,8 @@ describe('computeAiTargets', () => {
   })
 
   it('no presser when nobody is within PRESS_R and the ball is not urgent', () => {
-    const t = computeAiTargets(world({ x: 34, y: 40 }), 'opp', emptyStep, ON)
+    // oST now at y=35: use y=48 so oST(y=35) is 13 m away and oCAM(y=62) is 14 m away — both > pressR=12
+    const t = computeAiTargets(world({ x: 34, y: 48 }), 'opp', emptyStep, ON)
     expect(Object.values(t).some((v) => v.role === 'presser')).toBe(false)
   })
 

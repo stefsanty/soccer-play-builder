@@ -12,7 +12,7 @@ const ours: [string, number, number][] = [
 // OPP face down the pitch, so their "left" is screen right: the OPP shape is the OURS layout mirrored (x -> 68 - x).
 const opp: [string, number, number][] = [
   ['oGK', 34, 100], ['oLB', 54, 78], ['oLCB', 40, 82], ['oRCB', 20, 82], ['oRB', 8, 78],
-  ['oCML', 46, 62], ['oCMR', 16, 62], ['oCAM', 34, 62], ['oLW', 54, 72], ['oRW', 8, 72], ['oST', 34, 72],
+  ['oCML', 46, 62], ['oCMR', 16, 62], ['oCAM', 34, 62], ['oLW', 54, 42], ['oRW', 8, 42], ['oST', 34, 35],
 ]
 
 type Pass = [from: string, to: string, t0: number, t1: number]

@@ -42,7 +42,7 @@ describe('QA 0 — defensive shape and theory', () => {
     // the carrier is oRCB / oGK / oLCB, 3 to 23 m from their own goal: a defending shape would sit at y ~ 97-103
     const ys = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((t) => backLineY(tl, t))
     // (a few metres of momentum from the end of step 4, where the block was still dropping to the ball at ST)
-    expect(Math.max(...ys)).toBeLessThanOrEqual(ys[0] + 4)
+    expect(Math.max(...ys)).toBeLessThanOrEqual(ys[0] + 5) // +5: new forward positions shift step-3 end slightly deeper
     expect(ys[0] - ys[8]).toBeGreaterThan(12) // ...then it climbs a long way (to the in-possession line, ~68)
     expect(ys[8]).toBeLessThan(70) // and steps up to the (mid) maximum line, y = 105 - 42 = 63
   })
@@ -408,13 +408,13 @@ describe('QA 3 — authored rules mixed with the AI', () => {
   })
 
   it('hysteresis: a rival only 1 m closer does not steal the press; one clearly closer (> 3 m) does', () => {
-    const w = world({ x: 34, y: 78 }, { owner: 'ours' })
+    const w = world({ x: 34, y: 57 }, { owner: 'ours' })
     const a = computeAiTargets(w, 'opp', emptyStep, ON)
     const incumbent = Object.entries(a).find(([, v]) => v.role === 'presser')![0]
     const inc = w.players.find((p) => p.id === incumbent)!
-    const rival = w.players.find((p) => p.team === 'opp' && p.id !== incumbent && !/gk/i.test(p.label) && Math.hypot(p.x - 34, p.y - 78) < 14)!
-    const d0 = Math.hypot(inc.x - 34, inc.y - 78)
-    const place = (p: AiWorldPlayer, d: number) => { p.x = 34 + d; p.y = 78 } // on a line from the ball
+    const rival = w.players.find((p) => p.team === 'opp' && p.id !== incumbent && !/gk/i.test(p.label) && Math.hypot(p.x - 34, p.y - 57) < 14)!
+    const d0 = Math.hypot(inc.x - 34, inc.y - 57)
+    const place = (p: AiWorldPlayer, d: number) => { p.x = 34 + d; p.y = 57 } // on a line from the ball
     place(rival, d0 - 1)
     expect(Object.entries(computeAiTargets(w, 'opp', emptyStep, ON)).find(([, v]) => v.role === 'presser')![0]).toBe(incumbent)
     place(rival, Math.max(0.5, d0 - 4))

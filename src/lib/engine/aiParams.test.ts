@@ -71,7 +71,7 @@ describe('resolveAiParams', () => {
 })
 
 describe('aggressiveness: how defenders break shape to press', () => {
-  const ball = { x: 34, y: 76 } // oST (34,72) is 4 m away
+  const ball = { x: 34, y: 59 } // oCAM (34,62) is 3 m away
   const roles = (cfg: object) => computeAiTargets(world(ball, { owner: 'ours' }), 'opp', emptyStep, { on: true, ...cfg })
   const count = (t: ReturnType<typeof roles>, r: string) => Object.values(t).filter((v) => v.role === r).length
 
@@ -99,7 +99,7 @@ describe('aggressiveness: how defenders break shape to press', () => {
     expect(count(t, 'cover')).toBe(1)
     expect(count(t, 'support')).toBe(1)
     const support = Object.values(t).find((v) => v.role === 'support')!
-    expect(Math.hypot(support.x - 34, support.y - 76)).toBeLessThan(5) // he comes right up to the ball
+    expect(Math.hypot(support.x - 34, support.y - 59)).toBeLessThan(5) // he comes right up to the ball
     expect(support.gain).toBe(P({ aggressiveness: 90 }).coverGain)
   })
 
@@ -147,7 +147,8 @@ describe('aggressiveness: how defenders break shape to press', () => {
 })
 
 describe('width', () => {
-  const left = () => world({ x: 10, y: 60 }, { owner: 'ours' })
+  // y=30: oRW(y=42) is 12.2 m from ball — just outside pressR=12, so no presser/cover, all players in block
+  const left = () => world({ x: 10, y: 30 }, { owner: 'ours' })
   const t = (width: number, w = left()) => computeAiTargets(w, 'opp', emptyStep, { on: true, width })
 
   it('wide players are held at least 3 m + inward from the touchlines', () => {
