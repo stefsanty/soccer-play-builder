@@ -100,16 +100,12 @@ export const HANDOFF_R = 6
 export const WIDE_LANE_REACH = 12
 /** Shorter than this there is no lane to cut: the "receiver" is the carrier's own feet, and going there is pressing. */
 export const MIN_LANE = 8
-/** Share of the gap to the ball's x that the block closes while a press is on (high aggressiveness only). */
-const PRESS_SQUEEZE = 0.18
 /** How far sideways the cover may come off his own slot to get behind the press. */
 const COVER_REACH = 8
 /** How far a cutter will step off his own slot to get onto a lane. Past this he holds his position instead. */
 export const LANE_REACH = 18
 /** Neighbours may be this much further apart than their formation spacing before cohesion starts pulling. */
 export const NEIGHBOUR_SLACK = 5
-/** Share of the overstretch to a neighbour that cohesion takes back per pass. */
-const COHESION = 0.5
 /** How many formation neighbours each player is tied to. */
 const NEIGHBOURS = 2
 /** A slot nearer the middle than this is a central one, and is held there. */
@@ -124,10 +120,23 @@ export const WIDE_HOLD = { tight: 2, loose: 10 } as const
  * how much of it the far side still feels at width 0, so a compact block narrows as a whole.
  */
 export const BALL_PULL = { full: 12, none: 40, floor: 0.3 } as const
-/** How far a flank player goes to get across an attacker who is standing in his flank. */
-const FLANK_TRACK = 0.65
-/** An attacker this close to a flank player's slot, on his side, is his to deal with. */
-export const FLANK_ZONE = 14
+/** An opponent further than this from a player's slot exerts no gravity on him at all. */
+export const GRAVITY_R = 15
+/** Gravity aims this far goal-side of the opponent, so the defender ends up between him and the goal. */
+const GRAVITY_GAP = 2
+/**
+ * What a player holding shape wants, and how much. These are weighed against each other in one place (see
+ * solveShape) rather than applied as a chain of overrides, so no one of them can quietly undo another.
+ *   slot       stand where the formation puts you
+ *   ball       slide towards the ball side, fading with distance from the ball
+ *   gravity    stick to an opponent near your zone, stronger the closer he is
+ *   neighbour  come back into contact when the shape is stretched
+ * `ballPress` multiplies the ball pull while a hard press is on: the block squeezes as a unit instead of
+ * sending a second chaser after the carrier.
+ */
+export const W = { slot: 1, ball: 2.5, gravity: 2.8, neighbour: 0.9, ballPress: 1.6 } as const
+/** How many times the weighed pulls are re-solved; neighbours move, so it settles rather than resolving once. */
+const SOLVE_PASSES = 4
 
 const PITCH_W = 68
 const PITCH_H = 105
@@ -352,8 +361,14 @@ export function computeAiTargets(
   const lineD = blendedLineDepth(dBall, P, inPossession)
   const shiftX = blockShift(ball.x, P)
 
-  // ---- block position for everyone (before presser / cover / screens override some) ----
-  const block = new Map<string, XY>()
+  const xLo = 3 + P.widthInward
+  const xHi = PITCH_W - 3 - P.widthInward
+
+  // ---- the slot: where the formation on its own would put each player ----
+  // Depth comes from the line height; sideways it is simply his formation x. Nothing about the ball or the
+  // opposition is baked in here — every reason to stand somewhere else is a pull weighed against this one
+  // in solveShape below.
+  const slot = new Map<string, XY>()
   for (const p of field) {
     const line = lineOf.get(p.id) ?? 1
     let depth: number
@@ -364,41 +379,43 @@ export function computeAiTargets(
       if (!inPossession) depth = Math.min(depth, dBall - 1)
     }
     depth = Math.min(Math.max(2, depth), PITCH_H - 25) // never into the keeper's area from the other end either
-
-    // The slide towards the ball dies away with distance from it: the two or three men around the ball come
-    // across, the far side of the block does not. Sliding the whole block equally is what opens the far wing
-    // up for one long diagonal.
-    // A compact setting keeps a floor under it so the whole block still narrows a little; at full width the
-    // far side feels nothing at all and simply holds its ground.
-    const toBall = dist([p.x, p.y], [ball.x, ball.y])
-    const falloff = 1 - clamp((toBall - BALL_PULL.full) / (BALL_PULL.none - BALL_PULL.full), 0, 1)
-    const pull = Math.max(falloff, lerp(BALL_PULL.floor, 0, P.width / 100))
-    let x = p.home[0] + shiftX * pull
-
-    const off = p.home[0] - CENTRE_X
-    if (Math.abs(off) < CENTRAL_OFF) {
-      x = clamp(x, p.home[0] - 3, p.home[0] + 3) // central players stay central
-    } else if (Math.abs(off) >= WIDE_OFF) {
-      // A flank slot denies the wide outlet, so an attacker standing in that flank outranks the ball: get
-      // across him. Nothing else out here is worth leaving the flank for.
-      const threat = foes
-        .filter((a) => Math.sign(a.x - CENTRE_X) === Math.sign(off) && Math.abs(a.x - p.home[0]) <= FLANK_ZONE)
-        .sort((a, b) => Math.abs(a.x - p.home[0]) - Math.abs(b.x - p.home[0]))[0]
-      if (threat) x = lerp(p.home[0], threat.x, FLANK_TRACK)
-      // Width sets how far in he may ever come — a floor under the block's spread, not just a ceiling. Going
-      // the other way, out towards his own touchline, only the width limit below stops him.
-      const inwards = lerp(WIDE_HOLD.loose, WIDE_HOLD.tight, P.width / 100)
-      x = off < 0 ? Math.min(x, p.home[0] + inwards) : Math.max(x, p.home[0] - inwards)
-    }
-    // width: the formation holds between 3 m + inward from the touchlines (inward is 0 at width 100)
-    block.set(p.id, [clamp(x, 3 + P.widthInward, PITCH_W - 3 - P.widthInward), yOf(depth)])
+    slot.set(p.id, [clamp(p.home[0], xLo, xHi), yOf(depth)])
   }
 
   const role = new Map<string, Exclude<AiRole, 'auto'>>()
   for (const p of field) role.set(p.id, lineOf.get(p.id) === defIdx ? 'line' : 'wide')
-  const target = new Map<string, XY>(block)
+  const target = new Map<string, XY>(slot)
   const gain = new Map<string, number>(field.map((p) => [p.id, GAIN.block] as const))
   const lane = new Map<string, string>()
+
+  /**
+   * The limits that are absolute rather than weighed: the pitch and the width setting, a central slot staying
+   * central, a flank slot never being drawn further in than the width allows (outwards it is free — that is
+   * the wing it is there to deny), and a lane cutter staying on the pass he was given, the solve deciding
+   * only where along it he stands.
+   */
+  const confine = (p: AiWorldPlayer, pt: XY): XY => {
+    const recv = foes.find((f) => f.id === lane.get(p.id))
+    if (recv) {
+      // A cutter's lane IS his permitted ground — canCut already checked it against his flank and his reach
+      // before giving it to him — so the lane governs here and the solve only picks where along it he stands.
+      // Running the lateral limits afterwards instead would just push him off the pass.
+      const from: XY = [clamp(pt[0], 2, PITCH_W - 2), clamp(pt[1], 2, PITCH_H - 2)]
+      const on = closestPointOnSegment(from, [ball.x, ball.y], [recv.x, recv.y], MIN_LANE / 2)
+      return [on[0], clamp(on[1] + goalDir * 1, 0, PITCH_H)]
+    }
+    let x = pt[0]
+    const off = p.home[0] - CENTRE_X
+    if (Math.abs(off) < CENTRAL_OFF) {
+      x = clamp(x, p.home[0] - 3, p.home[0] + 3)
+    } else if (Math.abs(off) >= WIDE_OFF) {
+      const inwards = lerp(WIDE_HOLD.loose, WIDE_HOLD.tight, P.width / 100)
+      x = off < 0 ? Math.min(x, p.home[0] + inwards) : Math.max(x, p.home[0] - inwards)
+    }
+    return [clamp(x, xLo, xHi), clamp(pt[1], 2, PITCH_H - 2)]
+  }
+
+  let pressing = false
 
   if (!inPossession) {
     // ---- is someone already engaging the ball through an authored job (press / mark / follow the carrier)? ----
@@ -431,6 +448,7 @@ export function computeAiTargets(
       }
     }
     S.memory.presser = { ...S.memory.presser, [team]: presser?.id }
+    pressing = presser !== undefined
 
     if (presser) {
       target.set(presser.id, [clamp(ball.x, 2, PITCH_W - 2), clamp(ball.y + goalDir * 1.2, 0, PITCH_H)])
@@ -456,7 +474,7 @@ export function computeAiTargets(
       if (cover) {
         const towardsCentre = Math.sign(CENTRE_X - anchor.x)
         // he tucks across towards the press, he does not relocate: no further than COVER_REACH from his own slot
-        const slotX = block.get(cover.id)![0]
+        const slotX = slot.get(cover.id)![0]
         const wanted = clamp(anchor.x + towardsCentre * 3, 2, PITCH_W - 2)
         target.set(cover.id, [clamp(wanted, slotX - COVER_REACH, slotX + COVER_REACH), clamp(anchor.y + goalDir * 5, 0, PITCH_H)])
         gain.set(cover.id, P.coverGain)
@@ -478,13 +496,13 @@ export function computeAiTargets(
       const onTheLine = new Set<string>()
       for (const p of field) {
         if (lineOf.get(p.id) !== defIdx || pulled.has(p.id)) continue
-        const bx = block.get(p.id)![0]
+        const bx = slot.get(p.id)![0]
         for (const a of foes) if (dist([bx, lineY], [a.x, a.y]) <= HANDOFF_R) onTheLine.add(a.id)
       }
       /** The spot ON the lane to `a` that `m` would take: the nearest to his own slot, never closer to the
        *  carrier than MIN_LANE / 2, which is the presser's business and not his. */
       const spotOnLane = (m: AiWorldPlayer, a: AiWorldPlayer): XY =>
-        closestPointOnSegment(block.get(m.id)!, [ball.x, ball.y], [a.x, a.y], MIN_LANE / 2)
+        closestPointOnSegment(slot.get(m.id)!, [ball.x, ball.y], [a.x, a.y], MIN_LANE / 2)
 
       /** May `m` be the one to cut the pass to `a`? Pure geometry: his band of the pitch, a real pass, his own
        *  flank, a lane nobody covers already, and close enough that covering it does not strand him. */
@@ -494,7 +512,7 @@ export function computeAiTargets(
         if (aDepth <= Math.min(dBall, mHome) || aDepth >= Math.max(dBall, mHome)) return false // between ball and slot
         if (dist([a.x, a.y], [ball.x, ball.y]) < MIN_LANE) return false // a real pass, not the carrier's feet
         if (Math.abs(m.home[0] - CENTRE_X) >= 10 && Math.abs(a.x - m.home[0]) > WIDE_LANE_REACH) return false // holds his flank
-        if (dist(block.get(m.id)!, spotOnLane(m, a)) > LANE_REACH) return false // too far to cover without stranding him
+        if (dist(slot.get(m.id)!, spotOnLane(m, a)) > LANE_REACH) return false // too far to cover without stranding him
         const blockers = field.filter((d) => d.id !== m.id && !pulled.has(d.id)).map((d): XY => [d.x, d.y])
         return passingLaneOpen([ball.x, ball.y], [a.x, a.y], blockers)
       }
@@ -521,26 +539,20 @@ export function computeAiTargets(
       }
     }
 
-    // ---- press compression: the block squeezes towards the ball side as ONE unit while the press goes in.
-    //      This is what high aggressiveness buys instead of a second chaser: nobody leaves his zone. ----
-    if (presser && P.pressBreakers >= 2) {
-      for (const p of field) {
-        const r = role.get(p.id)
-        if (r !== 'line' && r !== 'wide') continue
-        const t = target.get(p.id)!
-        target.set(p.id, [clamp(t[0] + (ball.x - t[0]) * PRESS_SQUEEZE, 3 + P.widthInward, PITCH_W - 3 - P.widthInward), t[1]])
-      }
-    }
   } else {
     S.memory.presser = { ...S.memory.presser, [team]: undefined }
   }
 
-  // ---- cohesion: a player holding shape stays in contact with his formation neighbours ----
-  // A weighted pull, not a lock: only the overstretch past the formation spacing (plus slack) is taken back,
-  // and only a share of it per pass, so covering a lane still moves a player — it just cannot strand him.
-  // The presser and his cover are exempt: winning the ball is worth leaving the shape for.
+  // ---- solveShape: one weighed decision per player holding shape ----
+  // Everything a player who is not going to the ball might want is a pull — a point and a weight — and they
+  // are AVERAGED, not applied one after another. That is the whole point: a chain of overrides lets each step
+  // undo the one before it, and the balance between them ends up buried in the order they run. Here the
+  // balance is explicit (see W) and lives in one place.
+  //
+  // The presser and his cover are not in this: winning the ball is worth leaving the shape for, and they are
+  // the only two allowed to.
   {
-    const held = (id: string) => {
+    const holdsShape = (id: string) => {
       const r = role.get(id)
       return r === 'line' || r === 'wide' || r === 'screen'
     }
@@ -551,37 +563,75 @@ export function computeAiTargets(
       const q = own.find((p) => p.id === id)
       return q ? [q.x, q.y] : null
     }
-    for (let pass = 0; pass < 3; pass++) {
+    // The ball pull fades with distance, so the two or three men around the ball come across and the far side
+    // does not — sliding the whole block equally is what opens the far wing for one long diagonal. A compact
+    // width keeps a floor under it so the block still narrows as a whole.
+    const ballWeight = (p: AiWorldPlayer) => {
+      const d = dist([p.x, p.y], [ball.x, ball.y])
+      const falloff = 1 - clamp((d - BALL_PULL.full) / (BALL_PULL.none - BALL_PULL.full), 0, 1)
+      const reach = Math.max(falloff, lerp(BALL_PULL.floor, 0, P.width / 100))
+      return W.ball * reach * (pressing && P.pressBreakers >= 2 ? W.ballPress : 1)
+    }
+    // An opponent near a player's zone draws him in, harder the closer he is, and he aims to end up goal-side
+    // — between that man and the goal. This is what keeps a full-back with a winger who has stayed wide, and
+    // it is weighed against his slot and his neighbours rather than overriding them.
+    const gravity = (p: AiWorldPlayer): { at: XY; w: number } | null => {
+      const s = slot.get(p.id)!
+      let best: AiWorldPlayer | undefined
+      let bestD = Infinity
+      for (const a of foes) {
+        const d = dist(s, [a.x, a.y])
+        if (d < bestD) {
+          bestD = d
+          best = a
+        }
+      }
+      if (!best || bestD >= GRAVITY_R) return null
+      return { at: [best.x, clamp(best.y + goalDir * GRAVITY_GAP, 0, PITCH_H)], w: W.gravity * (1 - bestD / GRAVITY_R) }
+    }
+
+    for (let pass = 0; pass < SOLVE_PASSES; pass++) {
       for (const p of field) {
-        if (!held(p.id)) continue
-        const t = target.get(p.id)!
-        let px = 0
-        let py = 0
-        let n = 0
+        if (!holdsShape(p.id)) continue
+        const s = slot.get(p.id)!
+        const cur = target.get(p.id)!
+        let wx = s[0] * W.slot
+        let wy = s[1] * W.slot
+        let wsum = W.slot
+
+        const bw = ballWeight(p)
+        if (bw > 0) {
+          wx += clamp(s[0] + shiftX, xLo, xHi) * bw
+          wy += s[1] * bw
+          wsum += bw
+        }
+        const g = gravity(p)
+        if (g) {
+          wx += g.at[0] * g.w
+          wy += g.at[1] * g.w
+          wsum += g.w
+        }
+        // Contact with the formation: the pull is towards being back WITHIN reach of a neighbour, not on top
+        // of him, and it only exists once the shape is stretched past its spacing plus the slack.
+        // A neighbour who has gone to the ball is not part of the shape while he is there — following him out
+        // is how a block unravels — so he is not counted.
         for (const nb of neighbours.get(p.id) ?? []) {
+          const nbRole = role.get(nb.id)
+          if (nbRole === 'presser' || nbRole === 'cover') continue
           const q = anchorOf(nb.id)
           if (!q) continue
-          const d = dist(t, q)
+          const d = dist(cur, q)
           const limit = nb.d + NEIGHBOUR_SLACK
           if (d <= limit || d < 1e-9) continue
-          const excess = d - limit
-          px += ((q[0] - t[0]) / d) * excess
-          py += ((q[1] - t[1]) / d) * excess
-          n++
+          const k = limit / d
+          // The weight keeps growing with the stretch, so a badly stranded player is pulled back hard while a
+          // marginal one is barely touched. A capped weight would let a big stretch sit there unanswered.
+          const w = W.neighbour * clamp((d - limit) / NEIGHBOUR_SLACK, 0, 4)
+          wx += (q[0] + (cur[0] - q[0]) * k) * w
+          wy += (q[1] + (cur[1] - q[1]) * k) * w
+          wsum += w
         }
-        if (!n) continue
-        let x = clamp(t[0] + (px / n) * COHESION, 2, PITCH_W - 2)
-        // the block keeps central players central; cohesion pulls sideways, so it must not undo that
-        if (Math.abs(p.home[0] - CENTRE_X) < 10) x = clamp(x, p.home[0] - 3, p.home[0] + 3)
-        let next: XY = [x, clamp(t[1] + (py / n) * COHESION, 2, PITCH_H - 2)]
-        // A cutter slides ALONG his lane to keep contact, never off it: standing beside a pass blocks
-        // nothing, and cutting it is the job he was given.
-        const recv = foes.find((f) => f.id === lane.get(p.id))
-        if (recv) {
-          const on = closestPointOnSegment(next, [ball.x, ball.y], [recv.x, recv.y], MIN_LANE / 2)
-          next = [on[0], clamp(on[1] + goalDir * 1, 0, PITCH_H)]
-        }
-        target.set(p.id, next)
+        target.set(p.id, confine(p, [wx / wsum, wy / wsum]))
       }
     }
   }
@@ -680,8 +730,8 @@ export function computeAiTargets(
   for (const p of field) {
     const f = forced[p.id]
     if (!f || f === 'auto' || f === 'presser' || f === 'cover') continue
-    if (f === 'line') target.set(p.id, [block.get(p.id)![0], yOf(lineD)])
-    else if (f === 'wide') target.set(p.id, block.get(p.id)!)
+    if (f === 'line') target.set(p.id, [slot.get(p.id)![0], yOf(lineD)])
+    else if (f === 'wide') target.set(p.id, slot.get(p.id)!)
     // 'screen' keeps its lane target when one exists, 'gk' is handled below for the keeper
     if (f !== 'screen') role.set(p.id, f)
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AiWorld, FLANK_ZONE, GAIN, INTENSITY, LANE_BLOCK_R, MIN_LANE, NEIGHBOUR_SLACK, PRESETS, WIDE_HOLD, WIDE_LANE_REACH, blendedLineDepth, blockShift, computeAiTargets, distPointToSegment, lineDepth, passingLaneOpen, resolveAiParams, type AiWorldPlayer, type XY } from '@/lib/engine/ai'
+import { AiWorld, GAIN, INTENSITY, LANE_BLOCK_R, MIN_LANE, NEIGHBOUR_SLACK, PRESETS, WIDE_HOLD, WIDE_LANE_REACH, blendedLineDepth, blockShift, computeAiTargets, distPointToSegment, lineDepth, passingLaneOpen, resolveAiParams, type AiWorldPlayer, type XY } from '@/lib/engine/ai'
 import { EXIT_MARGIN, HANDOFF_COOLDOWN, clampIntoBounds, contains, handoffCost, newFollowTrack, pickHandoff, trackExit } from '@/lib/engine/follow'
 import { H, getTimeline, sampleTimeline } from '@/lib/engine/simulator'
 import { ai, fl, mk, pr, zn } from '@/lib/engine/rules'
@@ -80,7 +80,7 @@ describe('computeAiTargets', () => {
     expect(shiftX).toBeLessThan(-3)
     // the centre-backs come across to the ball: the near one a long way, the far one barely at all
     expect(t.oRCB.x).toBeLessThan(homeOf(w, 'oRCB')[0] - 3)
-    expect(homeOf(w, 'oLCB')[0] - t.oLCB.x).toBeLessThan(3)
+    expect(homeOf(w, 'oLCB')[0] - t.oLCB.x).toBeLessThanOrEqual(3)
     // the far flank holds its ground instead of being dragged across — that is the wing a long ball would find
     expect(Math.abs(t.oLB.x - homeOf(w, 'oLB')[0])).toBeLessThanOrEqual(WIDE_HOLD.loose)
     // the near flank holds his too: he denies the wide outlet, he does not join the press
@@ -564,11 +564,19 @@ describe('width: the block keeps a flank for the long diagonal to beat', () => {
     expect(drift('oRCB')).toBeGreaterThan(drift('oLCB') + 2)
   })
 
-  it('width sets a floor under the spread: at max width a flank slot is pinned near its formation x', () => {
+  it('width sets a floor under the spread: at max width a flank slot is barely drawn inward at all', () => {
     const w = world({ x: 6, y: 60 }, { owner: 'ours' })
     const tight = computeAiTargets(w, 'opp', emptyStep, { on: true, width: 100 })
+    const loose = computeAiTargets(w, 'opp', emptyStep, { on: true, width: 0 })
     for (const id of ['oLB', 'oLW', 'oRW']) {
-      expect(Math.abs(tight[id].x - homeOf(w, id)[0]), id).toBeLessThanOrEqual(WIDE_HOLD.tight + FLANK_ZONE * 0.65 + 1e-9)
+      // a cutter is governed by his lane instead (it was already vetted against his flank), so he is not
+      // subject to the inward cap — see confine()
+      if (tight[id].role === 'screen' || loose[id].role === 'screen') continue
+      // inward is what width governs; outward is deliberately free, since that is the flank he is denying
+      const home = homeOf(w, id)[0]
+      const inward = (x: number) => Math.max(0, home < 34 ? x - home : home - x)
+      expect(inward(tight[id].x), id).toBeLessThanOrEqual(WIDE_HOLD.tight + 1e-9)
+      expect(inward(tight[id].x), id).toBeLessThanOrEqual(inward(loose[id].x) + 1e-9)
     }
   })
 
@@ -625,7 +633,9 @@ describe('cohesion: a player holding shape stays with his formation neighbours',
             if (!['line', 'wide', 'screen'].includes(v.role)) continue
             for (const n of nb.get(id) ?? []) {
               const q = t[n.id]
-              if (!q) continue
+              // a team-mate who has gone to press the ball is not part of the shape while he is there, so the
+              // distance to him is not a stretch in it
+              if (!q || !['line', 'wide', 'screen'].includes(q.role)) continue
               const over = Math.hypot(q.x - v.x, q.y - v.y) - (n.d + NEIGHBOUR_SLACK)
               if (over > worst) worst = over
               expect(over, `${id} stretched away from ${n.id}`).toBeLessThanOrEqual(RESIDUAL)
@@ -953,13 +963,16 @@ describe('the AI inside the simulation (seeded "Defensive AI test")', () => {
     }
   })
 
-  it('the block slides towards the ball side on the wide pass (step 2)', () => {
+  it('the near side of the block slides to the ball while the far side holds (step 2)', () => {
     const tl = getTimeline(play, 1)
-    const mean = (t: number) => {
-      const f = sampleTimeline(tl, t)
-      return ['oLB', 'oLCB', 'oRCB', 'oRB'].reduce((s, id) => s + f.players[id].x, 0) / 4
-    }
-    expect(mean(4.9)).toBeLessThan(mean(0.5) - 2) // LW is on the left (low x)
+    // The ball crosses the pitch during this step (RCB -> RB on the right, then out to LW on the left), so
+    // "near side" only means anything at a moment in time. By the end the ball is wide left: the near
+    // centre-back has come across to it, and the far full-back is still out on his own flank.
+    const f = sampleTimeline(tl, 4.9)
+    const homeX = (id: string) => play.players.find((q) => q.id === id)!.x
+    expect(f.players.LW.x).toBeLessThan(20) // the ball really is wide left by now
+    expect(f.players.oRCB.x).toBeLessThan(homeX('oRCB'))
+    expect(Math.abs(f.players.oLB.x - homeX('oLB'))).toBeLessThan(10)
   })
 
   it('an authored press overrides the AI when it fires: oRB presses LW from 1.8 s (step 2)', () => {

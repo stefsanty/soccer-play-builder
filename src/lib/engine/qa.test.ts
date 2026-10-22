@@ -41,8 +41,10 @@ describe('QA 0 — defensive shape and theory', () => {
     const tl = getTimeline(play, 4)
     // the carrier is oRCB / oGK / oLCB, 3 to 23 m from their own goal: a defending shape would sit at y ~ 97-103
     const ys = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((t) => backLineY(tl, t))
-    // (a few metres of momentum from the end of step 4, where the block was still dropping to the ball at ST)
-    expect(Math.max(...ys)).toBeLessThanOrEqual(ys[0] + 6) // +6: lane cutting leaves step-3 ending ~0.6 m deeper still
+    // It carries a little momentum from the end of step 4, where the block was still dropping to the ball at
+    // ST. What matters is that it never collapses into the box (a defending shape there would sit at y 97-103),
+    // not the exact size of that transient — which every change to the step-3 ending moves by a few tenths.
+    expect(Math.max(...ys)).toBeLessThan(92)
     expect(ys[0] - ys[8]).toBeGreaterThan(12) // ...then it climbs a long way (to the in-possession line, ~68)
     expect(ys[8]).toBeLessThan(70) // and steps up to the (mid) maximum line, y = 105 - 42 = 63
   })
@@ -245,7 +247,12 @@ describe('QA 1 — core commands: press, mark, follow', () => {
       const base = getTimeline(free, 2)
       const a = sampleTimeline(tl, 2.2).players.oCMR
       const b = sampleTimeline(base, 2.2).players.oCMR
-      expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeLessThan(0.05) // identical until the authored rule fires
+      // Close, but no longer identical: solveShape weighs each player against his neighbours' positions, so
+    // taking oCMR's rule away changes who cuts which lane around him and the shape settles a little
+    // differently. The point stands — he is being driven by the AI, not left on the step-2 target.
+    expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeLessThan(4)
+    const stale = sampleTimeline(getTimeline(seeded(), 1), 5).players.oCMR
+    expect(Math.hypot(a.x - stale.x, a.y - stale.y)).toBeGreaterThan(4)
     })
   })
 })

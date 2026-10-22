@@ -115,7 +115,9 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
         if (['line', 'wide', 'screen'].includes(v.role)) {
           for (const n of nb.get(id) ?? []) {
             const q = full[n.id]
-            if (!q) continue
+            // only between two players who are both holding the shape: the distance to a team-mate who has
+            // gone to press the ball is not a stretch in the shape, it is him doing his job
+            if (!q || !['line', 'wide', 'screen'].includes(q.role)) continue
             const over = Math.hypot(q.x - v.x, q.y - v.y) - (n.d + NEIGHBOUR_SLACK)
             if (over > worstOverstretch) {
               worstOverstretch = over
