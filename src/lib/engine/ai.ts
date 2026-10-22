@@ -124,6 +124,8 @@ export const BALL_PULL = { full: 12, none: 40, floor: 0.3 } as const
 export const GRAVITY_R = 15
 /** Gravity aims this far goal-side of the opponent, so the defender ends up between him and the goal. */
 const GRAVITY_GAP = 2
+/** How far from his slot the push away from an already-covered opponent aims. */
+const REPEL_STEP = 10
 /**
  * What a player holding shape wants, and how much. These are weighed against each other in one place (see
  * solveShape) rather than applied as a chain of overrides, so no one of them can quietly undo another.
@@ -134,7 +136,7 @@ const GRAVITY_GAP = 2
  * `ballPress` multiplies the ball pull while a hard press is on: the block squeezes as a unit instead of
  * sending a second chaser after the carrier.
  */
-export const W = { slot: 1, ball: 2.5, gravity: 2.8, neighbour: 0.9, ballPress: 1.6 } as const
+export const W = { slot: 1, ball: 2.5, gravity: 2.8, repel: 0.5, neighbour: 0.9, ballPress: 1.6 } as const
 /** How many times the weighed pulls are re-solved; neighbours move, so it settles rather than resolving once. */
 const SOLVE_PASSES = 4
 
@@ -579,6 +581,16 @@ export function computeAiTargets(
     // defender wasted, and somewhere else an attacker is free. A pressing team-mate does not count as cover —
     // he is going to the ball, not standing with anyone.
     const coverers = own.filter((q) => !isGk(q) && role.get(q.id) !== 'presser' && role.get(q.id) !== 'cover')
+    /**
+     * How free `a` is of everyone except `p`, as `p` sees it: 1 when nobody else is near him, 0 when a
+     * team-mate is standing on him. Measured against p's own distance, so it also settles who takes the man —
+     * the closer one keeps his claim and the further one looks elsewhere.
+     */
+    const freedom = (p: AiWorldPlayer, a: AiWorldPlayer, d: number) => {
+      if (own.some((q) => q.id !== p.id && q.duty?.att === a.id)) return 0 // already somebody's job
+      const nearestOther = Math.min(Infinity, ...coverers.filter((q) => q.id !== p.id).map((q) => dist([q.x, q.y], [a.x, a.y])))
+      return clamp(nearestOther / Math.max(d, 1), 0, 1)
+    }
     const gravity = (p: AiWorldPlayer): { at: XY; w: number } | null => {
       const s = slot.get(p.id)!
       let bestAt: XY | null = null
@@ -586,13 +598,7 @@ export function computeAiTargets(
       for (const a of foes) {
         const d = dist(s, [a.x, a.y])
         if (d >= GRAVITY_R) continue
-        if (own.some((q) => q.id !== p.id && q.duty?.att === a.id)) continue // a team-mate is assigned to him
-        // How free is he? Measured against me: if a team-mate is nearer him than I am the pull fades away, and
-        // if that team-mate is right on top of him it vanishes. Judging it relative to my own distance is also
-        // what settles who takes him — the closer man keeps his claim, the further one goes elsewhere.
-        const nearestOther = Math.min(Infinity, ...coverers.filter((q) => q.id !== p.id).map((q) => dist([q.x, q.y], [a.x, a.y])))
-        const free = clamp(nearestOther / Math.max(d, 1), 0, 1)
-        const w = W.gravity * (1 - d / GRAVITY_R) * free
+        const w = W.gravity * (1 - d / GRAVITY_R) * freedom(p, a, d)
         // the strongest claim wins, so he is drawn to the free man rather than the best-covered one
         if (w > bestW) {
           bestW = w
@@ -600,6 +606,29 @@ export function computeAiTargets(
         }
       }
       return bestAt ? { at: bestAt, w: bestW } : null
+    }
+    /**
+     * Negative gravity: pushed away from an opponent a team-mate already has. Standing beside a job that is
+     * done is how a defender ends up contributing nothing, and it is half of what makes two men converge on
+     * one attacker — `freedom` stops him being drawn in, this moves him back out.
+     */
+    const repel = (p: AiWorldPlayer): { at: XY; w: number } | null => {
+      const s = slot.get(p.id)!
+      let ax = 0
+      let ay = 0
+      let w = 0
+      for (const a of foes) {
+        const d = dist(s, [a.x, a.y])
+        if (d >= GRAVITY_R || d < 1e-6) continue
+        const covered = 1 - freedom(p, a, d)
+        if (covered <= 0) continue
+        const weight = W.repel * covered * (1 - d / GRAVITY_R)
+        ax += ((s[0] - a.x) / d) * weight
+        ay += ((s[1] - a.y) / d) * weight
+        w += weight
+      }
+      if (w <= 0) return null
+      return { at: [clamp(s[0] + (ax / w) * REPEL_STEP, 2, PITCH_W - 2), clamp(s[1] + (ay / w) * REPEL_STEP, 2, PITCH_H - 2)], w }
     }
 
     for (let pass = 0; pass < SOLVE_PASSES; pass++) {
@@ -617,8 +646,8 @@ export function computeAiTargets(
           wy += s[1] * bw
           wsum += bw
         }
-        const g = gravity(p)
-        if (g) {
+        for (const g of [gravity(p), repel(p)]) {
+          if (!g) continue
           wx += g.at[0] * g.w
           wy += g.at[1] * g.w
           wsum += g.w

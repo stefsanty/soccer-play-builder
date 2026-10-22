@@ -65,13 +65,20 @@ export interface RoleRow {
 
 /** Two defenders inside this of the same opponent are both covering him — one of them is wasted. */
 export const DOUBLE_MARK_R = 6
+/**
+ * An opponent this far from every defender's slot is not the block's business — the attacking side's own
+ * back four, forty metres behind the ball, are "unmarked" in the arithmetic sense and ought to be. Only
+ * opponents inside the area the block is actually responsible for are counted as free.
+ */
+export const BLOCK_ZONE_R = 20
 
 export interface AiReport {
   roles: RoleRow[]
   lanes: { assigned: number; onLane: number }
   cohesion: { worstOverstretch: number; worstPair: string }
-  /** How often two shape-holding defenders end up on the same opponent, and how many opponents nobody is near. */
-  marking: { doubled: number; samples: number; unmarkedMean: number }
+  /** How often two shape-holding defenders end up on the same opponent, and how many opponents inside the
+   *  block's area have nobody near them. */
+  marking: { doubled: number; samples: number; unmarkedMean: number; inZoneMean: number }
   width: { width: number; openWing: number; openWingVsWideAttacker: number; nearestToWideAttacker: number }[]
   phase1: { outlets: number; cut: number; cutters: string[]; backLineSpread: number }
 }
@@ -86,6 +93,7 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
   let doubled = 0
   let samples = 0
   let unmarkedTotal = 0
+  let inZoneTotal = 0
 
   for (const stepIdx of [0, 1, 2, 3]) {
     const tl = getTimeline(play, stepIdx)
@@ -140,14 +148,22 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
       const holders = Object.entries(full)
         .filter(([, v]) => ['line', 'wide', 'screen'].includes(v.role))
         .map(([, v]) => v)
+      const slots = Object.keys(full).map((id) => HOME.get(id)!)
       let unmarked = 0
+      let inZone = 0
       for (const a of players.filter((q) => q.team === 'ours' && !/gk/i.test(q.label))) {
         const on = holders.filter((v) => Math.hypot(v.x - a.x, v.y - a.y) <= DOUBLE_MARK_R).length
-        if (on === 0) unmarked++
         if (on >= 2) doubled++
+        // only the ones the block is there to deal with
+        const relevant = holders.some((v) => Math.hypot(v.x - a.x, v.y - a.y) <= BLOCK_ZONE_R)
+        if (!relevant) continue
+        inZone++
+        if (on === 0) unmarked++
       }
+      void slots
       samples++
       unmarkedTotal += unmarked
+      inZoneTotal += inZone
     }
   }
 
@@ -168,7 +184,7 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
     roles,
     lanes: { assigned, onLane },
     cohesion: { worstOverstretch, worstPair },
-    marking: { doubled, samples, unmarkedMean: samples ? unmarkedTotal / samples : 0 },
+    marking: { doubled, samples, unmarkedMean: samples ? unmarkedTotal / samples : 0, inZoneMean: samples ? inZoneTotal / samples : 0 },
   }
 }
 
@@ -231,7 +247,8 @@ export function formatAiReport(r: AiReport = aiReport()): string[] {
   out.push(`COHESION  worst overstretch past formation spacing + ${NEIGHBOUR_SLACK} m slack: ${r.cohesion.worstOverstretch.toFixed(1)} m (${r.cohesion.worstPair})`)
   out.push(
     `MARKING  ${r.marking.doubled} opponents double-covered within ${DOUBLE_MARK_R} m over ${r.marking.samples} frames ` +
-      `(${(r.marking.doubled / r.marking.samples).toFixed(2)} per frame); ${r.marking.unmarkedMean.toFixed(1)} opponents with nobody near them`,
+      `(${(r.marking.doubled / r.marking.samples).toFixed(2)} per frame); of ${r.marking.inZoneMean.toFixed(1)} opponents inside the block's area, ` +
+      `${r.marking.unmarkedMean.toFixed(1)} have nobody within ${DOUBLE_MARK_R} m`,
   )
   out.push('')
   out.push('WIDTH  ball on the left touchline; "open wing" is the far-side space a long diagonal would find')

@@ -1045,6 +1045,14 @@ describe('gravity: an opponent already covered does not pull a second defender',
     expect(Math.abs(t.oD2.x - 44)).toBeLessThan(1.5) // stays in his slot: A is not his man
   })
 
+  it('is pushed back off a man a team-mate already has, not merely left unmoved', () => {
+    const covered = scene([54, 75]) // oD1 a metre from A
+    const free = scene([10, 78]) // oD1 away on the other flank
+    // negative gravity: A sits at x 54, so being drawn in would raise oD2's x above his slot of 44
+    expect(covered.oD2.x).toBeLessThanOrEqual(44 + 1e-9)
+    expect(covered.oD2.x).toBeLessThan(free.oD2.x - 3)
+  })
+
   it('an authored marker counts as cover too, however far off he currently is', () => {
     const players: AiWorldPlayer[] = [
       { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 100, home: [34, 100] },
