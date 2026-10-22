@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AiWorld, GAIN, INTENSITY, PRESETS, blendedLineDepth, blockShift, computeAiTargets, lineDepth, resolveAiParams, type AiWorldPlayer } from '@/lib/engine/ai'
+import { AiWorld, GAIN, INTENSITY, LANE_BLOCK_R, MIN_LANE, PRESETS, blendedLineDepth, blockShift, computeAiTargets, distPointToSegment, lineDepth, passingLaneOpen, resolveAiParams, type AiWorldPlayer, type XY } from '@/lib/engine/ai'
 import { EXIT_MARGIN, HANDOFF_COOLDOWN, clampIntoBounds, contains, handoffCost, newFollowTrack, pickHandoff, trackExit } from '@/lib/engine/follow'
 import { H, getTimeline, sampleTimeline } from '@/lib/engine/simulator'
 import { ai, fl, mk, pr, zn } from '@/lib/engine/rules'
@@ -10,9 +10,9 @@ const NOW = '2026-01-01T00:00:00.000Z'
 const seeded = (): Play => ({ ...toPlayInsert(), id: 'ai-test', createdAt: NOW, updatedAt: NOW })
 
 /** The seeded roster at its starting positions, with the ball somewhere. */
-function world(ball: { x: number; y: number } | null): AiWorld {
+function world(ball: { x: number; y: number } | null, extra: Partial<AiWorld> = {}): AiWorld {
   const players: AiWorldPlayer[] = seeded().players.map((p) => ({ id: p.id, team: p.team, label: p.label, x: p.x, y: p.y, home: [p.x, p.y] }))
-  return { players, ball, memory: {} }
+  return { players, ball, memory: {}, ...extra }
 }
 const emptyStep = { defenderRules: {}, moves: [] }
 const ON = { on: true } as const
@@ -80,7 +80,7 @@ describe('computeAiTargets', () => {
     // wide players on the ball side take the full shift, far side tucks in even more
     expect(t.oLB.x).toBeLessThan(homeOf(w, 'oLB')[0] - 3)
     // oRW (home x = 8) is on the ball side already: held at the width limit, 3 m + the default inward 6 m
-    // (oRB is pulled as cover for the presser — oRW is the ball-side wide player remaining in the block)
+    // (the open lanes all run well outside his flank, so he holds it instead of stepping onto one)
     expect(t.oRW.x).toBeCloseTo(3 + DEFAULTS.widthInward, 6)
     expect(t.oRCB.x).toBeLessThan(homeOf(w, 'oRCB')[0] - 3)
     // central players stay central: at most 3 m from home
@@ -270,6 +270,37 @@ describe('computeAiTargets', () => {
       expect(t[pid].y).toBeGreaterThanOrEqual(72 - 5) // heading for the ball
     })
 
+    it('the back line keeps its spacing with both the gap and the separation rules acting on it', () => {
+      // The two pull opposite ways: the gap rule caps how far apart neighbours may sit, separation sets a
+      // floor. With the allowance floored at minSep they settle within ~0.75 m of it (the relaxation is
+      // iterative, not exact) instead of the line collapsing on itself.
+      for (const by of [4, 25, 46, 67, 88, 100]) {
+        for (const bx of [2, 18, 34, 50, 66]) {
+          for (const team of ['opp', 'ours'] as const) {
+            const t = computeAiTargets(world({ x: bx, y: by }), team, emptyStep, ON)
+            const back = (team === 'opp' ? ['oLB', 'oLCB', 'oRCB', 'oRB'] : ['LB', 'LCB', 'RCB', 'RB'])
+              .filter((id) => t[id] && t[id].role === 'line')
+              .sort((a, b) => t[a].x - t[b].x)
+            for (let i = 0; i + 1 < back.length; i++) {
+              expect(t[back[i + 1]].x - t[back[i]].x).toBeGreaterThanOrEqual(minSep() - 1)
+            }
+          }
+        }
+      }
+    })
+
+    it('two defenders pinned on the same spot are not swapped over by the order they are visited in', () => {
+      // both slots clamp to the same x against the width limit, so only the formation can say who goes left
+      const players: AiWorldPlayer[] = [
+        { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 100, home: [34, 100] },
+        { id: 'oRCB', team: 'opp', label: 'oRCB', x: 20, y: 82, home: [20, 82] },
+        { id: 'oRB', team: 'opp', label: 'oRB', x: 8, y: 82, home: [8, 82] },
+      ]
+      const t = computeAiTargets({ players, ball: { x: 8, y: 28 }, memory: {} }, 'opp', emptyStep, ON)
+      expect(t.oRB.x).toBeLessThan(t.oRCB.x) // the full-back stays outside the centre-back
+      expect(t.oRCB.x - t.oRB.x).toBeGreaterThanOrEqual(minSep() - 1)
+    })
+
     it('does not separate players with an authored press/mark/follow duty', () => {
       const w = world({ x: 34, y: 60 })
       // Give oLCB an authored press duty on the ball carrier
@@ -284,6 +315,194 @@ describe('computeAiTargets', () => {
       // We only assert oRCB gets a valid target (it might be pushed, oLCB might not be)
       expect(t['oRCB']).toBeDefined()
     })
+  })
+})
+
+describe('passing-lane geometry', () => {
+  it('distPointToSegment: on the line, perpendicular to it, and past either end', () => {
+    const a: XY = [0, 0]
+    const b: XY = [10, 0]
+    expect(distPointToSegment([5, 0], a, b)).toBe(0) // standing on the pass
+    expect(distPointToSegment([5, 3], a, b)).toBe(3) // square to the middle of it
+    expect(distPointToSegment([0, 0], a, b)).toBe(0) // on the carrier
+    expect(distPointToSegment([-4, 0], a, b)).toBe(4) // behind the carrier: the segment does not extend
+    expect(distPointToSegment([14, 0], a, b)).toBe(4) // beyond the receiver
+    expect(distPointToSegment([13, 4], a, b)).toBe(5) // beyond the receiver and off to the side
+    expect(distPointToSegment([4, 3], [1, 1], [1, 1])).toBeCloseTo(Math.hypot(3, 2), 9) // carrier == receiver
+  })
+
+  it('a lane is open until a defender stands inside the corridor', () => {
+    const carrier: XY = [26, 25]
+    const receiver: XY = [26, 55]
+    expect(passingLaneOpen(carrier, receiver, [])).toBe(true)
+    expect(passingLaneOpen(carrier, receiver, [[26, 40]])).toBe(false) // right on it
+    expect(passingLaneOpen(carrier, receiver, [[29, 40]])).toBe(false) // 3 m off, inside LANE_BLOCK_R
+    expect(passingLaneOpen(carrier, receiver, [[26 + LANE_BLOCK_R, 40]])).toBe(false) // exactly on the limit
+    expect(passingLaneOpen(carrier, receiver, [[31, 40]])).toBe(true) // 5 m off: the pass is on
+    expect(passingLaneOpen(carrier, receiver, [[31, 40], [26, 45]])).toBe(false) // any one blocker shuts it
+  })
+
+  it('a defender past the receiver, or behind the carrier, is not covering the lane', () => {
+    expect(passingLaneOpen([26, 25], [26, 55], [[26, 62]])).toBe(true)
+    expect(passingLaneOpen([26, 25], [26, 55], [[26, 18]])).toBe(true)
+  })
+
+  it('the corridor width is configurable', () => {
+    expect(passingLaneOpen([0, 0], [0, 20], [[6, 10]], 5)).toBe(true)
+    expect(passingLaneOpen([0, 0], [0, 20], [[6, 10]], 8)).toBe(false)
+  })
+
+  it('a diagonal lane is measured square to the pass, not along the axes', () => {
+    // the pass runs (0,0) -> (10,10); a defender at (6,4) is 1.41 m from it, well inside the corridor
+    expect(distPointToSegment([6, 4], [0, 0], [10, 10])).toBeCloseTo(Math.SQRT2, 9)
+    expect(passingLaneOpen([0, 0], [10, 10], [[6, 4]])).toBe(false)
+    expect(passingLaneOpen([0, 0], [10, 10], [[9, 2]])).toBe(true) // 4.95 m off the diagonal
+  })
+})
+
+describe('pressing: one presser, and the block keeps its shape behind him', () => {
+  it('never sends two players at the same carrier, at any ball position or aggressiveness', () => {
+    for (const by of [10, 25, 40, 55, 70, 85, 100]) {
+      for (const bx of [6, 20, 34, 48, 62]) {
+        for (const aggressiveness of [30, 50, 70, 100]) {
+          for (const team of ['opp', 'ours'] as const) {
+            const t = computeAiTargets(world({ x: bx, y: by }), team, emptyStep, { on: true, aggressiveness })
+            expect(Object.values(t).filter((v) => v.role === 'presser').length).toBeLessThanOrEqual(1)
+          }
+        }
+      }
+    }
+  })
+
+  it('the one presser is the closest eligible defender to the ball', () => {
+    const w = world({ x: 34, y: 85 })
+    const t = computeAiTargets(w, 'opp', emptyStep, ON)
+    const presser = Object.entries(t).find(([, v]) => v.role === 'presser')![0]
+    const d = (p: AiWorldPlayer) => Math.hypot(p.x - 34, p.y - 85)
+    const closest = w.players.filter((p) => p.team === 'opp' && !/gk/i.test(p.label)).sort((a, b) => d(a) - d(b))[0]
+    expect(presser).toBe(closest.id)
+  })
+
+  it('an authored press already on the carrier stops the AI adding a second presser', () => {
+    const w = world({ x: 26, y: 25 }, { owner: 'ours', focus: 'LCB' })
+    w.players.find((p) => p.id === 'oST')!.duty = { type: 'press', att: 'LCB' }
+    const t = computeAiTargets(w, 'opp', emptyStep, ON)
+    expect(Object.values(t).filter((v) => v.role === 'presser')).toHaveLength(0)
+  })
+
+  it('only the presser and his cover get a ball-seeking job, even at full aggressiveness', () => {
+    for (const ball of [{ x: 34, y: 85 }, { x: 14, y: 70 }, { x: 50, y: 60 }]) {
+      const t = computeAiTargets(world(ball), 'opp', emptyStep, { on: true, aggressiveness: 100 })
+      // everyone else is holding the block or cutting a lane — no third man goes to the carrier
+      const breaking = Object.values(t).filter((v) => !['line', 'wide', 'screen', 'gk'].includes(v.role))
+      expect(breaking.map((v) => v.role).sort()).toEqual(['cover', 'presser'])
+      // and a lane cutter is never parked on the carrier's feet: he is on a pass worth cutting
+      for (const v of Object.values(t).filter((v) => v.role === 'screen')) {
+        expect(Math.hypot(v.x - ball.x, v.y - ball.y)).toBeGreaterThanOrEqual(MIN_LANE / 2 - 1e-9)
+      }
+    }
+  })
+
+  it('the block holds its slots while the press goes in: only the ball side squeeze moves it', () => {
+    const w = world({ x: 14, y: 70 })
+    const t = computeAiTargets(w, 'opp', emptyStep, { on: true, aggressiveness: 100 })
+    const P = resolveAiParams({ aggressiveness: 100 })
+    for (const [id, v] of Object.entries(t)) {
+      if (!['line', 'wide'].includes(v.role)) continue
+      // a block player never ends up further from his home x than the slide plus the squeeze can carry him
+      expect(Math.abs(v.x - homeOf(w, id)[0])).toBeLessThanOrEqual(P.shiftMax + 0.2 * 68 + 1e-9)
+    }
+  })
+
+  it('the cover comes from behind the press and tucks across without leaving its own slot', () => {
+    const w = world({ x: 26, y: 25 }, { owner: 'ours', focus: 'LCB' })
+    const t = computeAiTargets(w, 'opp', emptyStep, ON)
+    const [coverId, cover] = Object.entries(t).find(([, v]) => v.role === 'cover')!
+    const presser = Object.values(t).find((v) => v.role === 'presser')!
+    // he is goal-side of the press (OPP defend y = 105) and no more than COVER_REACH off his own home x
+    expect(cover.y).toBeGreaterThan(presser.y)
+    expect(Math.abs(cover.x - homeOf(w, coverId)[0])).toBeLessThanOrEqual(8 + DEFAULTS.shiftMax + 1e-9)
+    // and a wide player is never the one dragged in to do it
+    expect(['oLW', 'oRW', 'oLB', 'oRB']).not.toContain(coverId)
+  })
+})
+
+describe('lane cutters: phase 1 of the test play — oST presses the blue LCB', () => {
+  const phase1 = () => {
+    const w = world({ x: 26, y: 25 }, { owner: 'ours', focus: 'LCB' })
+    return { w, t: computeAiTargets(w, 'opp', emptyStep, ON) }
+  }
+  /** The lane cutter's target is the midpoint of ball -> receiver, nudged 1 m goal-side. */
+  const laneMid = (recv: [number, number]): [number, number] => [(26 + recv[0]) / 2, (25 + recv[1]) / 2 + 1]
+  const near = (v: { x: number; y: number }, p: [number, number]) => Math.hypot(v.x - p[0], v.y - p[1]) < 1e-6
+
+  it('oST is the presser and the only player who goes to the ball', () => {
+    const { t } = phase1()
+    expect(t.oST.role).toBe('presser')
+    expect(t.oST.gain).toBe(GAIN.press)
+    expect(Math.hypot(t.oST.x - 26, t.oST.y - 25)).toBeLessThan(2)
+  })
+
+  it('all three central outlets out of LCB are cut, each by the midfielder nearest that lane', () => {
+    const { t } = phase1()
+    const cutters = Object.entries(t).filter(([, v]) => v.role === 'screen')
+    expect(cutters.map(([id]) => id).sort()).toEqual(['oCAM', 'oCML', 'oCMR'])
+    // LCM (22,45), CM (34,48) and RCM (52,45) each have a cutter stepping onto their lane
+    for (const recv of [[22, 45], [34, 48], [52, 45]] as [number, number][]) {
+      expect(cutters.some(([, v]) => near(v, laneMid(recv)))).toBe(true)
+    }
+    // each takes the lane nearest his own zone: oCMR (home x 16) -> LCM, oCAM (34) -> CM, oCML (46) -> RCM
+    expect(near(t.oCMR, laneMid([22, 45]))).toBe(true)
+    expect(near(t.oCAM, laneMid([34, 48]))).toBe(true)
+    expect(near(t.oCML, laneMid([52, 45]))).toBe(true)
+    for (const id of ['oCML', 'oCMR', 'oCAM']) expect(t[id].gain).toBe(GAIN.screen)
+  })
+
+  it('the wingers hold their flanks instead of dropping into midfield', () => {
+    const { w, t } = phase1()
+    for (const id of ['oLW', 'oRW']) {
+      expect(t[id].role).toBe('wide')
+      expect(Math.abs(t[id].x - homeOf(w, id)[0])).toBeLessThanOrEqual(DEFAULTS.shiftMax + 1e-9)
+    }
+  })
+
+  it('the back line steps up together and holds one height', () => {
+    const { w, t } = phase1()
+    const back = ['oLB', 'oLCB', 'oRCB', 'oRB']
+    const ys = back.map((id) => t[id].y)
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(1e-9) // one height, cover included
+    for (const id of back) expect(t[id].y).toBeLessThan(homeOf(w, id)[1] - 8) // stepped up (OPP: towards y = 0)
+    expect(ys[0]).toBeCloseTo(105 - blendedLineDepth(80, DEFAULTS), 6)
+  })
+})
+
+describe('lane cutters: the back line taking over frees the cutter in front', () => {
+  // A high line (line height + aggressiveness at 100) steps up past the midfielder's own zone, so the two
+  // can contest the same attacker; A sits on the line's height, B is a lane further forward.
+  const scene = (cbX: number) => {
+    const players: AiWorldPlayer[] = [
+      { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 100, home: [34, 100] },
+      { id: 'oCB', team: 'opp', label: 'oCB', x: cbX, y: 82, home: [cbX, 82] },
+      { id: 'oMID', team: 'opp', label: 'oMID', x: 34, y: 62, home: [34, 62] },
+      { id: 'C', team: 'ours', label: 'C', x: 34, y: 30, home: [34, 30] },
+      { id: 'A', team: 'ours', label: 'A', x: 34, y: 53, home: [34, 53] },
+      { id: 'B', team: 'ours', label: 'B', x: 34, y: 40, home: [34, 40] },
+    ]
+    const w: AiWorld = { players, ball: { x: 34, y: 30 }, memory: {}, owner: 'ours', focus: 'C' }
+    return computeAiTargets(w, 'opp', emptyStep, { on: true, aggressiveness: 100, lineHeight: 100 })
+  }
+
+  it('shadows the nearer attacker when the centre-back is away on the other side', () => {
+    const t = scene(10) // the CB's slot is 24 m across: it never reaches A
+    expect(t.oMID.role).toBe('screen')
+    expect(t.oMID.y).toBeCloseTo((30 + 53) / 2 + 1, 6) // on the lane to A, the one nearest his zone
+  })
+
+  it('pushes higher onto the next lane once the line has stepped onto that attacker', () => {
+    const t = scene(34) // the CB steps up onto A
+    expect(t.oMID.role).toBe('screen')
+    expect(t.oMID.y).toBeCloseTo((30 + 40) / 2 + 1, 6) // handed A over, now cutting the lane to B
+    expect(t.oMID.y).toBeLessThan((30 + 53) / 2 + 1) // higher up the pitch (OPP: towards y = 0)
   })
 })
 

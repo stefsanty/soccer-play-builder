@@ -13,9 +13,11 @@
 // `intensity` (low / mid / high) is the old quick-set: it maps to aggressiveness 20 / 50 / 80.
 //
 // DEFENDING (the other team has the ball): the line height blends the ball-driven depth (see lineDepth) with the
-// lineHeight target, and is always kept goal-side of the ball. The block slides sideways towards the ball, one
-// player presses (with a cover behind him, and at high aggressiveness a nearby midfielder collapsing too),
-// central midfielders close passing lanes to unmarked central attackers, and the keeper tracks the ball.
+// lineHeight target, and is always kept goal-side of the ball. The block slides sideways towards the ball and
+// exactly ONE player presses, with a cover behind him; at high aggressiveness the block squeezes further towards
+// the ball side as a unit rather than sending a second chaser (shape over chase). Everyone else who is not in the
+// back line steps onto an OPEN passing lane out of the carrier (see passingLaneOpen), nearest his own zone first,
+// and the keeper tracks the ball.
 // IN POSSESSION (the team's own player has the ball, or it is on its way to one): there is nobody to defend
 // against, so the team holds its shape high instead of collapsing around its own ball: no presser, no cover, no
 // lane screens, and the line is not bound to sit behind the ball.
@@ -88,6 +90,18 @@ export const URGENT_DBALL = 80
 export const GAIN = { press: 4.0, cover: 2.6, screen: 2.4, block: 2.2, gk: 1.8 } as const
 /** Neighbours in a line may be at most their formation spacing plus this far apart. */
 export const GAP_SLACK = 4
+/** A defender this close to a pass's straight line is counted as covering it (metres). */
+export const LANE_BLOCK_R = 3.5
+/** As the back line pushes up it takes over any attacker it comes this close to, freeing that attacker's screener. */
+export const HANDOFF_R = 6
+/** A wide player only shadows a receiver this close in x to his own slot: he cuts lanes, he does not leave the flank. */
+export const WIDE_LANE_REACH = 12
+/** Shorter than this there is no lane to cut: the "receiver" is the carrier's own feet, and going there is pressing. */
+export const MIN_LANE = 8
+/** Share of the gap to the ball's x that the block closes while a press is on (high aggressiveness only). */
+const PRESS_SQUEEZE = 0.18
+/** How far sideways the cover may come off his own slot to get behind the press. */
+const COVER_REACH = 8
 
 const PITCH_W = 68
 const PITCH_H = 105
@@ -104,6 +118,29 @@ const isGk = (p: AiWorldPlayer) => /gk/i.test(p.label)
 /** Piecewise-linear through three anchors at positions p0 < p1 < p2 (clamped outside). */
 const tri = (v: number, [p0, p1, p2]: [number, number, number], [y0, y1, y2]: [number, number, number]) =>
   v <= p1 ? lerp(y0, y1, clamp((v - p0) / (p1 - p0), 0, 1)) : lerp(y1, y2, clamp((v - p1) / (p2 - p1), 0, 1))
+
+/**
+ * Distance from `p` to the finite segment `a`-`b`. Beyond either end it is the distance to that end, so a
+ * defender standing past the receiver does not count as being on the pass.
+ */
+export function distPointToSegment(p: XY, a: XY, b: XY): number {
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const lenSq = dx * dx + dy * dy
+  if (lenSq < 1e-12) return dist(p, a)
+  const t = clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq, 0, 1)
+  return dist(p, [a[0] + t * dx, a[1] + t * dy])
+}
+
+/**
+ * Is the straight pass from `carrier` to `receiver` on? It is open while every blocker is further than
+ * `threshold` from the line between them — a defender inside that corridor is close enough to read and
+ * intercept the ball. Pass the blockers who are actually holding position: a presser on his way to the ball
+ * has left the lane he happens to be standing in.
+ */
+export function passingLaneOpen(carrier: XY, receiver: XY, blockers: readonly XY[], threshold = LANE_BLOCK_R): boolean {
+  return blockers.every((b) => distPointToSegment(b, carrier, receiver) > threshold)
+}
 
 export interface AiParams {
   aggressiveness: number
@@ -329,56 +366,63 @@ export function computeAiTargets(
       role.set(presser.id, 'presser')
     }
 
-    // ---- cover: next closest to the ball-winner (presser, or the authored player on the ball) from the same
-    //      or a deeper line, 5 m goal-side and 3 m towards the centre. Only when aggressiveness lets a second
-    //      player break shape (a forced `cover` role always applies). ----
+    // ---- cover: ONE player behind the ball-winner (presser, or the authored player on the ball), 5 m goal-side
+    //      and 3 m towards the centre. Picked from a deeper line where there is one (so the cover really is
+    //      behind the press), and from the zone nearest the ball rather than whichever body happens to be
+    //      closest — otherwise a far-side wide player gets dragged out of his flank. Only when aggressiveness
+    //      lets a second player break shape (a forced `cover` role always applies). ----
     const anchor = presser ?? engaged
     const forcedCover = field.find((p) => forced[p.id] === 'cover' && p.id !== anchor?.id)
     let cover: AiWorldPlayer | undefined
     if (anchor) {
       const aLine = lineOf.get(anchor.id) ?? 1
+      const rank = (p: AiWorldPlayer) => ((lineOf.get(p.id) ?? 1) === aLine ? 1 : 0) // a deeper line first
       const coverPool = field
         .filter((p) => p.id !== anchor.id && (lineOf.get(p.id) ?? 1) <= aLine)
-        .sort((a, b) => dist([a.x, a.y], [anchor.x, anchor.y]) - dist([b.x, b.y], [anchor.x, anchor.y]))
+        .sort((a, b) => rank(a) - rank(b) || Math.abs(a.home[0] - ball.x) - Math.abs(b.home[0] - ball.x))
       cover = forcedCover ?? (P.pressBreakers >= 1 ? coverPool[0] : undefined)
       if (cover) {
         const towardsCentre = Math.sign(CENTRE_X - anchor.x)
-        target.set(cover.id, [clamp(anchor.x + towardsCentre * 3, 2, PITCH_W - 2), clamp(anchor.y + goalDir * 5, 0, PITCH_H)])
+        // he tucks across towards the press, he does not relocate: no further than COVER_REACH from his own slot
+        const slotX = block.get(cover.id)![0]
+        const wanted = clamp(anchor.x + towardsCentre * 3, 2, PITCH_W - 2)
+        target.set(cover.id, [clamp(wanted, slotX - COVER_REACH, slotX + COVER_REACH), clamp(anchor.y + goalDir * 5, 0, PITCH_H)])
         gain.set(cover.id, P.coverGain)
         role.set(cover.id, 'cover')
       }
     }
 
-    // ---- high aggressiveness: the nearest midfielder also breaks and collapses on the ball carrier ----
-    if (anchor && P.pressBreakers >= 2) {
-      const support = byBall.find((p) => (lineOf.get(p.id) ?? 1) !== defIdx && p.id !== anchor.id && p.id !== cover?.id && forced[p.id] !== 'wide')
-      if (support && role.get(support.id) !== 'presser' && role.get(support.id) !== 'cover') {
-        const side = ball.x === CENTRE_X ? 1 : Math.sign(CENTRE_X - ball.x)
-        target.set(support.id, [clamp(ball.x + side * 2.5, 2, PITCH_W - 2), clamp(ball.y + goalDir * 3.5, 0, PITCH_H)])
-        gain.set(support.id, P.coverGain)
-        role.set(support.id, 'support')
-      }
-    }
-
-    // ---- lane screening: central midfielders close the passing lane to an unmarked central attacker
-    //      (at low aggressiveness nobody leaves the block, so there is no screening) ----
+    // ---- lane cutters: everyone outside the back line who is not on the ball steps onto an open passing lane
+    //      out of the carrier (at low aggressiveness nobody leaves the block, so there is no screening) ----
     if (P.pressBreakers >= 1) {
       const taken = new Set<string>()
       const onJob = new Set(own.map((p) => p.duty?.att).filter((x): x is string => !!x)) // already marked / pressed / followed
       const carrier = foes.find((f) => dist([f.x, f.y], [ball.x, ball.y]) < 2)
-      const screeners = field.filter((p) => {
-        const r = role.get(p.id)
-        return r !== 'presser' && r !== 'cover' && r !== 'support' && lineOf.get(p.id) !== defIdx && Math.abs(p.home[0] - CENTRE_X) < 14 && forced[p.id] !== 'wide'
-      })
+      // A presser / cover is on his way to the ball, so a lane he happens to stand in is not covered by him.
+      const pulled = new Set(field.filter((p) => role.get(p.id) === 'presser' || role.get(p.id) === 'cover').map((p) => p.id))
+      // Handoff: the back line picks up whoever it steps onto as it pushes up, which frees that attacker's
+      // screener to cut a lane further forward instead of shadowing someone already covered.
+      const lineY = yOf(lineD)
+      const onTheLine = new Set<string>()
+      for (const p of field) {
+        if (lineOf.get(p.id) !== defIdx || pulled.has(p.id)) continue
+        const bx = block.get(p.id)![0]
+        for (const a of foes) if (dist([bx, lineY], [a.x, a.y]) <= HANDOFF_R) onTheLine.add(a.id)
+      }
+      const screeners = field.filter((p) => !pulled.has(p.id) && lineOf.get(p.id) !== defIdx && forced[p.id] !== 'wide')
       for (const m of [...screeners].sort((a, b) => dist([a.x, a.y], [ball.x, ball.y]) - dist([b.x, b.y], [ball.x, ball.y]))) {
         const mHome = depthOf(m.home[1])
         const lo = Math.min(dBall, mHome)
         const hi = Math.max(dBall, mHome)
+        const blockers = field.filter((d) => d.id !== m.id && !pulled.has(d.id)).map((d): XY => [d.x, d.y])
+        const wide = Math.abs(m.home[0] - CENTRE_X) >= 10
         const open = foes
-          .filter((a) => a !== carrier && !taken.has(a.id) && !onJob.has(a.id) && Math.abs(a.x - CENTRE_X) < 14)
-          .filter((a) => depthOf(a.y) > lo && depthOf(a.y) < hi)
-          .filter((a) => !own.some((d) => !isGk(d) && dist([d.x, d.y], [a.x, a.y]) < 4)) // unmarked
-          .sort((a, b) => dist([a.x, a.y], [ball.x, ball.y]) - dist([b.x, b.y], [ball.x, ball.y]))[0]
+          .filter((a) => a !== carrier && !taken.has(a.id) && !onJob.has(a.id) && !onTheLine.has(a.id))
+          .filter((a) => depthOf(a.y) > lo && depthOf(a.y) < hi) // between the ball and his own zone
+          .filter((a) => dist([a.x, a.y], [ball.x, ball.y]) >= MIN_LANE) // a real pass, not the carrier's feet
+          .filter((a) => !wide || Math.abs(a.x - m.home[0]) <= WIDE_LANE_REACH) // a wide man holds his flank
+          .filter((a) => passingLaneOpen([ball.x, ball.y], [a.x, a.y], blockers))
+          .sort((a, b) => dist(m.home, [a.x, a.y]) - dist(m.home, [b.x, b.y]))[0] // nearest his own zone first
         if (!open) continue
         taken.add(open.id)
         target.set(m.id, [clamp((ball.x + open.x) / 2, 2, PITCH_W - 2), clamp((ball.y + open.y) / 2 + goalDir * 1, 0, PITCH_H)])
@@ -386,42 +430,28 @@ export function computeAiTargets(
         role.set(m.id, 'screen')
       }
     }
+
+    // ---- press compression: the block squeezes towards the ball side as ONE unit while the press goes in.
+    //      This is what high aggressiveness buys instead of a second chaser: nobody leaves his zone. ----
+    if (presser && P.pressBreakers >= 2) {
+      for (const p of field) {
+        const r = role.get(p.id)
+        if (r !== 'line' && r !== 'wide') continue
+        const t = target.get(p.id)!
+        target.set(p.id, [clamp(t[0] + (ball.x - t[0]) * PRESS_SQUEEZE, 3 + P.widthInward, PITCH_W - 3 - P.widthInward), t[1]])
+      }
+    }
   } else {
     S.memory.presser = { ...S.memory.presser, [team]: undefined }
   }
 
-  // ---- no gaps in a line: neighbours stay within their formation spacing (+ slack) ----
-  // (the sideways shift moves wide players more than the pinned central ones, which would tear a hole between them)
-  const blockPlayers = field.filter((p) => role.get(p.id) === 'line' || role.get(p.id) === 'wide')
-  const lines = new Map<number, AiWorldPlayer[]>()
-  for (const p of blockPlayers) {
-    const li = lineOf.get(p.id) ?? 1
-    lines.set(li, [...(lines.get(li) ?? []), p])
-  }
-  for (const group of lines.values()) {
-    const g = [...group].sort((a, b) => a.home[0] - b.home[0])
-    for (let pass = 0; pass < g.length; pass++) {
-      let changed = false
-      for (let i = 0; i + 1 < g.length; i++) {
-        const l = target.get(g[i].id)!
-        const r = target.get(g[i + 1].id)!
-        const allowed = g[i + 1].home[0] - g[i].home[0] + GAP_SLACK
-        if (r[0] - l[0] > allowed + 1e-9) {
-          // pull the more peripheral of the two back towards the other
-          if (Math.abs(l[0] - CENTRE_X) > Math.abs(r[0] - CENTRE_X)) target.set(g[i].id, [r[0] - allowed, l[1]])
-          else target.set(g[i + 1].id, [l[0] + allowed, r[1]])
-          changed = true
-        }
-      }
-      if (!changed) break
-    }
-  }
+  const minSep = lerp(5, 8, P.width / 100)
 
   // ---- separation: keep AI-driven block players from clustering ----
-  // Runs before the offside line so the Y correction that follows re-pins the back line to one height;
-  // presser / cover / screen have specific tactical targets and are exempt.
+  // Runs before the no-gaps pass, which has the final word on spacing inside a line, and before the offside
+  // line, whose Y correction re-pins the back line to one height. Presser / cover / screen have specific
+  // tactical targets and are exempt.
   {
-    const minSep = lerp(5, 8, P.width / 100)
     const xLo = 3 + P.widthInward
     const xHi = PITCH_W - 3 - P.widthInward
     const sepExempt = (p: AiWorldPlayer): boolean => {
@@ -439,11 +469,25 @@ export function computeAiTargets(
           const tj = target.get(sepField[j].id)!
           const dx = tj[0] - ti[0]
           const dy = tj[1] - ti[1]
-          const d = Math.hypot(dx, dy)
+          // Two players of one line spread sideways only: the offside line flattens their y afterwards, which
+          // would eat any y part of the push.
+          const sameLine = lineOf.get(sepField[i].id) === lineOf.get(sepField[j].id)
+          const d = sameLine ? Math.abs(dx) : Math.hypot(dx, dy)
           if (d >= minSep) continue
-          let nx: number, ny: number
-          if (d < 1e-6) { nx = 1; ny = 0 } // identical positions: push apart along X
-          else { nx = dx / d; ny = dy / d }
+          let nx: number
+          let ny: number
+          if (sameLine) {
+            // They give way along the side they are already on; only when they sit on exactly the same spot
+            // does the formation break the tie, so two pinned players cannot be swapped by visiting order.
+            nx = (dx !== 0 ? dx : sepField[j].home[0] - sepField[i].home[0]) >= 0 ? 1 : -1
+            ny = 0
+          } else if (d < 1e-6) {
+            nx = 1 // identical positions: push apart along X
+            ny = 0
+          } else {
+            nx = dx / d
+            ny = dy / d
+          }
           const push = (minSep - d) / 2
           target.set(sepField[i].id, [clamp(ti[0] - nx * push, xLo, xHi), clamp(ti[1] - ny * push, 3, PITCH_H - 3)])
           target.set(sepField[j].id, [clamp(tj[0] + nx * push, xLo, xHi), clamp(tj[1] + ny * push, 3, PITCH_H - 3)])
@@ -451,6 +495,34 @@ export function computeAiTargets(
         }
       }
       if (!moved) break
+    }
+  }
+
+  // ---- no gaps in a line: neighbours stay within their formation spacing (+ slack) ----
+  // (the sideways shift moves wide players more than the pinned central ones, which would tear a hole between
+  //  them). The allowance never drops below minSep, so closing a gap cannot undo the separation above.
+  const blockPlayers = field.filter((p) => role.get(p.id) === 'line' || role.get(p.id) === 'wide')
+  const lines = new Map<number, AiWorldPlayer[]>()
+  for (const p of blockPlayers) {
+    const li = lineOf.get(p.id) ?? 1
+    lines.set(li, [...(lines.get(li) ?? []), p])
+  }
+  for (const group of lines.values()) {
+    const g = [...group].sort((a, b) => a.home[0] - b.home[0])
+    for (let pass = 0; pass < g.length; pass++) {
+      let changed = false
+      for (let i = 0; i + 1 < g.length; i++) {
+        const l = target.get(g[i].id)!
+        const r = target.get(g[i + 1].id)!
+        const allowed = Math.max(g[i + 1].home[0] - g[i].home[0] + GAP_SLACK, minSep)
+        if (r[0] - l[0] > allowed + 1e-9) {
+          // pull the more peripheral of the two back towards the other
+          if (Math.abs(l[0] - CENTRE_X) > Math.abs(r[0] - CENTRE_X)) target.set(g[i].id, [r[0] - allowed, l[1]])
+          else target.set(g[i + 1].id, [l[0] + allowed, r[1]])
+          changed = true
+        }
+      }
+      if (!changed) break
     }
   }
 

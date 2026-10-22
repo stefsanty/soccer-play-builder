@@ -93,14 +93,25 @@ describe('aggressiveness: how defenders break shape to press', () => {
     expect(count(t, 'support')).toBe(0)
   })
 
-  it('high (70-100): presser + cover + the nearest midfielder all collapse on the ball', () => {
+  it('high (70-100): still only a presser and his cover — the block squeezes instead of sending a chaser', () => {
     const t = roles({ aggressiveness: 90 })
     expect(count(t, 'presser')).toBe(1)
     expect(count(t, 'cover')).toBe(1)
-    expect(count(t, 'support')).toBe(1)
-    const support = Object.values(t).find((v) => v.role === 'support')!
-    expect(Math.hypot(support.x - 34, support.y - 59)).toBeLessThan(5) // he comes right up to the ball
-    expect(support.gain).toBe(P({ aggressiveness: 90 }).coverGain)
+    expect(count(t, 'support')).toBe(0) // nobody else abandons his zone to collapse on the carrier
+    // every other player is either holding the block or cutting a passing lane
+    const breaking = Object.values(t).filter((v) => !['line', 'wide', 'screen', 'gk'].includes(v.role))
+    expect(breaking.map((v) => v.role).sort()).toEqual(['cover', 'presser'])
+  })
+
+  it('the squeeze arrives with the second breaker: at 70 the block sits closer to the ball side than at 69', () => {
+    const at = (aggressiveness: number) => computeAiTargets(world({ x: 12, y: 59 }, { owner: 'ours' }), 'opp', emptyStep, { on: true, aggressiveness })
+    const a = at(69)
+    const b = at(70)
+    expect(Object.values(b).some((v) => v.role === 'presser')).toBe(true)
+    const held = Object.keys(a).filter((id) => a[id].role === 'line' && b[id].role === 'line')
+    expect(held.length).toBeGreaterThanOrEqual(3)
+    const meanX = (t: typeof a) => held.reduce((s, id) => s + t[id].x, 0) / held.length
+    expect(meanX(b)).toBeLessThan(meanX(a) - 0.5) // the ball is on the left, so squeezing lowers x
   })
 
   it('presser and cover gains follow the table', () => {

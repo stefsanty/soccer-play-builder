@@ -42,7 +42,7 @@ describe('QA 0 — defensive shape and theory', () => {
     // the carrier is oRCB / oGK / oLCB, 3 to 23 m from their own goal: a defending shape would sit at y ~ 97-103
     const ys = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((t) => backLineY(tl, t))
     // (a few metres of momentum from the end of step 4, where the block was still dropping to the ball at ST)
-    expect(Math.max(...ys)).toBeLessThanOrEqual(ys[0] + 5) // +5: new forward positions shift step-3 end slightly deeper
+    expect(Math.max(...ys)).toBeLessThanOrEqual(ys[0] + 6) // +6: lane cutting leaves step-3 ending ~0.6 m deeper still
     expect(ys[0] - ys[8]).toBeGreaterThan(12) // ...then it climbs a long way (to the in-possession line, ~68)
     expect(ys[8]).toBeLessThan(70) // and steps up to the (mid) maximum line, y = 105 - 42 = 63
   })
