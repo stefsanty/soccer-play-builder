@@ -259,7 +259,8 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col">
       {mode === 'preview' && play ? (
-        <AnimatedPitch fill play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep} />
+        <AnimatedPitch fill play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep}
+          onSwitchToEdit={() => { haptic(10); selectPlayer(null); setMode('select') }} />
       ) : (
         <div className="relative min-h-0 flex-1 bg-[var(--pitch)]">
         <svg
@@ -498,6 +499,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
               onOpenChange={setRunsOpen}
               onSetAll={(hidden) => setStepMovesHidden(currentStepIndex, hidden)}
               onBehavior={() => setBehaviorOpen(true)}
+              onSwitchToPlay={() => { haptic(10); selectPlayer(null); setMode('preview') }}
             />
           )}
         </>

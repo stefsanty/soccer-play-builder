@@ -4,7 +4,7 @@
 // panel. Each row has an eye toggle that hides/shows that run's arrow on the pitch (stored as `hidden: true` on the
 // move); the move itself is unaffected.
 
-import { Eye, EyeOff, Route, SlidersHorizontal } from 'lucide-react'
+import { Eye, EyeOff, Play, Route, SlidersHorizontal } from 'lucide-react'
 import type { PlayerMove } from '@/lib/types/play'
 
 export const BAR_HEIGHT = 84 // px: Edit's runs bar and Play's playback bar are the same height, so the pitch never resizes
@@ -18,11 +18,24 @@ interface RunsBarProps {
   onOpenChange: (open: boolean) => void
   onSetAll: (hidden: boolean) => void
   onBehavior: () => void
+  onSwitchToPlay?: () => void
 }
 
-export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior }: RunsBarProps) {
+export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior, onSwitchToPlay }: RunsBarProps) {
   const hidden = moves.filter((m) => m.hidden).length
   const allHidden = moves.length > 0 && hidden === moves.length
+  const playButton = onSwitchToPlay ? (
+    <button
+      type="button"
+      data-testid="switch-to-play"
+      aria-label="Switch to Play mode"
+      onClick={onSwitchToPlay}
+      className={`${btn} shrink-0 bg-[var(--app-accent)] px-3 text-[var(--app-accent-ink)]`}
+    >
+      <Play className="size-[18px]" aria-hidden />
+      <span>Play</span>
+    </button>
+  ) : null
   const behaviorButton = (
     <button
       type="button"
@@ -48,10 +61,11 @@ export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior }: Run
           <p className="m-0 min-w-0 flex-1 text-xs leading-snug text-[var(--app-muted)]">
             No runs in this step. Tap a player, choose Run, then tap the pitch.
           </p>
+          {playButton}
           {behaviorButton}
         </div>
       ) : (
-        <div className="grid grid-cols-[1.4fr_1fr_1fr] gap-1.5">
+        <div className={`grid ${onSwitchToPlay ? 'grid-cols-[1.4fr_1fr_1fr_auto]' : 'grid-cols-[1.4fr_1fr_1fr]'} gap-1.5`}>
           <button
             type="button"
             data-testid="runs-toggle"
@@ -76,6 +90,7 @@ export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior }: Run
             {allHidden ? 'Show all' : 'Hide all'}
           </button>
           {behaviorButton}
+          {playButton}
         </div>
       )}
     </div>

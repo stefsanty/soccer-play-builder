@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, CircleDot, Gauge, Pause, Play as PlayIcon, RotateCcw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CircleDot, Gauge, Pause, Pencil, Play as PlayIcon, RotateCcw } from 'lucide-react'
 import type { Play } from '@/lib/types/play'
 import { mToSvg } from '@/lib/engine/pitch'
 import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
@@ -34,6 +34,8 @@ interface AnimatedPitchProps {
   autoPlay?: boolean
   /** Fill the parent (editor Play mode) instead of sizing itself (viewer). */
   fill?: boolean
+  /** Called when the user taps "Edit" in the bottom bar (editor fill mode only). */
+  onSwitchToEdit?: () => void
 }
 
 const SPEEDS = [0.5, 1, 1.5, 2]
@@ -48,7 +50,7 @@ const pt = (x: number, y: number) => {
 const ctrl =
   'flex h-11 touch-manipulation select-none flex-col items-center justify-center gap-0.5 rounded-[10px] text-[10px] font-medium transition-all duration-100 active:scale-95 disabled:opacity-40 disabled:active:scale-100'
 
-export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, fill = false }: AnimatedPitchProps) {
+export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, fill = false, onSwitchToEdit }: AnimatedPitchProps) {
   const [speed, setSpeed] = useState(1)
   const engine = useAnimationEngine(play, stepIndex, speed)
   const { frame, timeline, time, isPlaying, progress } = engine
@@ -326,7 +328,14 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
         </div>
       )}
 
-      <div className={`grid grid-cols-5 gap-1 ${fill ? '' : 'mt-2'}`}>
+      <div className={`grid gap-1 ${fill && onSwitchToEdit ? 'grid-cols-6' : 'grid-cols-5'} ${fill ? '' : 'mt-2'}`}>
+        {fill && onSwitchToEdit && (
+          <button type="button" data-testid="switch-to-edit" aria-label="Switch to Edit mode" onClick={onSwitchToEdit}
+            className={`${ctrl} text-[#cbd5e1] hover:bg-white/5 active:bg-white/15`}>
+            <Pencil className="size-5" aria-hidden />
+            Edit
+          </button>
+        )}
         <button type="button" data-testid="reset" aria-label="Restart" onClick={engine.reset}
           className={`${ctrl} text-[#cbd5e1] hover:bg-white/5 active:bg-white/15`}>
           <RotateCcw className="size-5" aria-hidden />
