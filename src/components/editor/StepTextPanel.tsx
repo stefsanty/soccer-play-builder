@@ -7,6 +7,8 @@
 import type { ReactNode } from 'react'
 
 export const STEP_PANEL_HEIGHT = 124 // px
+/** The step-tab strip under the text panel. */
+export const STRIP_HEIGHT = 56 // px
 
 interface StepTextPanelProps {
   badge: string | number

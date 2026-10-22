@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import type { Play, PlayStep, PlayerMove, PassAnimation } from '@/lib/types/play'
+import type { AiConfig, Play, PlayStep, PlayerMove, PassAnimation } from '@/lib/types/play'
 
 export type EditorMode =
   | 'select'        // click to select player
@@ -30,6 +30,8 @@ interface EditorState {
   movePlayer: (playerId: string, toX: number, toY: number, stepIndex: number) => void
   addPass: (pass: PassAnimation, stepIndex: number) => void
   updatePlayerPosition: (playerId: string, x: number, y: number) => void  // initial position
+  /** Merge `patch` into a team's defensive-AI config for a step; keys set to undefined are removed. */
+  updateStepAi: (stepIndex: number, team: 'ours' | 'opp', patch: Partial<AiConfig>) => void
   /** Show/hide the arrow of one move in a step (`hidden: true` on the move). */
   toggleMoveHidden: (playerId: string, stepIndex: number) => void
   /** Hide or show every move arrow of a step. */
@@ -104,6 +106,14 @@ export const useEditorStore = create<EditorState>()(
       if (!s.play) return
       const player = s.play.players.find(p => p.id === playerId)
       if (player) { player.x = x; player.y = y }
+      s.isDirty = true
+    }),
+    updateStepAi: (stepIndex, team, patch) => set((s) => {
+      const step = s.play?.steps[stepIndex]
+      if (!step) return
+      const next: AiConfig = { ...(step.ai?.[team] ?? { on: false }), ...patch }
+      for (const k of Object.keys(patch) as (keyof AiConfig)[]) if (patch[k] === undefined) delete next[k]
+      step.ai = { ...step.ai, [team]: next }
       s.isDirty = true
     }),
     toggleMoveHidden: (playerId, stepIndex) => set((s) => {

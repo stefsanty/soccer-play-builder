@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AiWorld, GAIN, INTENSITY, blockShift, computeAiTargets, lineDepth, type AiWorldPlayer } from '@/lib/engine/ai'
+import { AiWorld, GAIN, INTENSITY, PRESETS, blendedLineDepth, blockShift, computeAiTargets, lineDepth, resolveAiParams, type AiWorldPlayer } from '@/lib/engine/ai'
 import { EXIT_MARGIN, HANDOFF_COOLDOWN, clampIntoBounds, contains, handoffCost, newFollowTrack, pickHandoff, trackExit } from '@/lib/engine/follow'
 import { H, getTimeline, sampleTimeline } from '@/lib/engine/simulator'
 import { ai, fl, mk, pr, zn } from '@/lib/engine/rules'
@@ -16,6 +16,7 @@ function world(ball: { x: number; y: number } | null): AiWorld {
 }
 const emptyStep = { defenderRules: {}, moves: [] }
 const ON = { on: true } as const
+const DEFAULTS = resolveAiParams({}) // aggressiveness 50, line height 50, width 50
 const homeOf = (w: AiWorld, id: string) => w.players.find((p) => p.id === id)!.home
 
 describe('lineDepth: defensive line height from the ball depth (mid)', () => {
@@ -52,16 +53,17 @@ describe('computeAiTargets', () => {
     // opp defend y = 105: the ball is 75 m from their goal
     const w = world({ x: 34, y: 30 })
     const t = computeAiTargets(w, 'opp', emptyStep, ON)
-    const line = 105 - lineDepth(75)
+    const line = 105 - blendedLineDepth(75, DEFAULTS) // ball-driven 39.9 blended with the line-height target (31.5)
     for (const id of ['oLB', 'oLCB', 'oRCB', 'oRB']) {
       expect(t[id].y).toBeCloseTo(line, 6)
       expect(t[id].y).toBeGreaterThan(30) // goal-side of the ball (towards y = 105)
-      expect(Math.abs(t[id].x - homeOf(w, id)[0])).toBeLessThan(0.5) // shiftX ~ 0
+      // shiftX ~ 0 (the default width only holds wide players 9 m in from the touchline: oRB 8 -> 9)
+      expect(Math.abs(t[id].x - homeOf(w, id)[0])).toBeLessThanOrEqual(1 + 1e-9)
     }
     expect(blockShift(34)).toBe(0)
     // and the same for the team defending y = 0: ball 30 m from their goal
     const o = computeAiTargets(world({ x: 34, y: 30 }), 'ours', emptyStep, ON)
-    const oursLine = lineDepth(30)
+    const oursLine = blendedLineDepth(30, DEFAULTS)
     const holding = Object.entries(o).filter(([id, v]) => ['LB', 'LCB', 'RCB', 'RB'].includes(id) && v.role !== 'presser')
     expect(holding.length).toBeGreaterThanOrEqual(3) // the ball is close to LCB, so he presses; the rest hold the line
     for (const [, v] of holding) {
@@ -77,7 +79,8 @@ describe('computeAiTargets', () => {
     expect(shiftX).toBeLessThan(-3)
     // wide players on the ball side take the full shift, far side tucks in even more
     expect(t.oLB.x).toBeLessThan(homeOf(w, 'oLB')[0] - 3)
-    expect(t.oRB.x).toBeLessThan(homeOf(w, 'oRB')[0] - 3)
+    // oRB (home x = 8) is on the ball side already: held at the width limit, 3 m + the default inward 6 m
+    expect(t.oRB.x).toBeCloseTo(3 + DEFAULTS.widthInward, 6)
     expect(t.oRCB.x).toBeLessThan(homeOf(w, 'oRCB')[0] - 3)
     // central players stay central: at most 3 m from home
     // (a player picked as presser / cover / lane screen is placed by that job instead of by the block)
@@ -99,7 +102,7 @@ describe('computeAiTargets', () => {
       expect(pressers).toHaveLength(1)
       expect(pressers[0][0]).toBe('ST') // the closest outfield player
       expect(pressers[0][1].gain).toBe(GAIN.press)
-      for (const id of ['LB', 'LCB', 'RCB', 'RB']) expect(t[id].y).toBeCloseTo(INTENSITY.mid.MAXLINE, 6)
+      for (const id of ['LB', 'LCB', 'RCB', 'RB']) expect(t[id].y).toBeCloseTo(blendedLineDepth(85, DEFAULTS), 6) // 36.75: halfway between the 42 m max line and the 31.5 m target
     })
 
     it('presses regardless of distance when the ball is urgent (dBall >= 80, or within 15 m of the goal)', () => {
@@ -121,7 +124,7 @@ describe('computeAiTargets', () => {
       const t = computeAiTargets(w, 'opp', emptyStep, ON)
       expect(Object.values(t).some((v) => v.role === 'presser')).toBe(true)
       const lines = ['oLB', 'oRB'].map((id) => t[id].y) // oLCB / oRCB may be the presser / cover
-      for (const y of lines) expect(y).toBeCloseTo(105 - lineDepth(20), 6) // 97
+      for (const y of lines) expect(y).toBeCloseTo(105 - blendedLineDepth(20, DEFAULTS), 6) // 87: goal-side of the ball whatever the blend says
     })
   })
 
@@ -148,7 +151,7 @@ describe('computeAiTargets', () => {
     const t = computeAiTargets(w, 'opp', emptyStep, ON)
     const cover = Object.entries(t).find(([, v]) => v.role === 'cover')!
     const back = ['oLB', 'oLCB', 'oRCB', 'oRB']
-    if (back.includes(cover[0])) expect(cover[1].y).toBeCloseTo(105 - lineDepth(35), 6)
+    if (back.includes(cover[0])) expect(cover[1].y).toBeCloseTo(105 - blendedLineDepth(35, DEFAULTS), 6)
     const presser = Object.entries(t).find(([, v]) => v.role === 'presser')![0]
     expect(back.includes(presser) ? 'presser may leave the line' : 'on the line').toBeTruthy()
   })

@@ -58,7 +58,7 @@ export interface FollowRule {
   handoff?: 'auto' | 'none' | string
 }
 
-export type AiRole = 'auto' | 'presser' | 'cover' | 'line' | 'wide' | 'screen' | 'gk'
+export type AiRole = 'auto' | 'presser' | 'cover' | 'support' | 'line' | 'wide' | 'screen' | 'gk'
 
 /**
  * Hand this player to the defensive AI (engine/ai.ts) from `delay`, optionally forcing a role.
@@ -78,7 +78,14 @@ export type DefenderRule = ZoneRule | MarkRule | PressRule | FollowRule | AiRule
 /** Defensive AI settings for one team in a step. */
 export interface AiConfig {
   on: boolean
-  intensity?: 'low' | 'mid' | 'high'   // default 'mid'
+  /** Quick-set bundle, kept for backward compatibility: maps to aggressiveness low=20, mid=50, high=80. */
+  intensity?: 'low' | 'mid' | 'high'
+  /** 0-100, default 50. How readily defenders break shape to press (takes precedence over `intensity`). */
+  aggressiveness?: number
+  /** 0-100, default 50. Explicit defensive-line height: 0 = defending the box, 100 = high press line. */
+  lineHeight?: number
+  /** 0-100, default 50. How wide the formation holds: 0 = compressed to the centre, 100 = wide players on the touchline. */
+  width?: number
   offsideLine?: boolean                  // default true
   reaction?: number                      // seconds before the AI engages; default 0.4
   exclude?: string[]                     // player ids the AI must not touch

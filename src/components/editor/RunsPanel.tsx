@@ -4,7 +4,7 @@
 // panel. Each row has an eye toggle that hides/shows that run's arrow on the pitch (stored as `hidden: true` on the
 // move); the move itself is unaffected.
 
-import { Eye, EyeOff, Route } from 'lucide-react'
+import { Eye, EyeOff, Route, SlidersHorizontal } from 'lucide-react'
 import type { PlayerMove } from '@/lib/types/play'
 
 export const BAR_HEIGHT = 84 // px: Edit's runs bar and Play's playback bar are the same height, so the pitch never resizes
@@ -17,11 +17,24 @@ interface RunsBarProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSetAll: (hidden: boolean) => void
+  onBehavior: () => void
 }
 
-export function RunsBar({ moves, open, onOpenChange, onSetAll }: RunsBarProps) {
+export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior }: RunsBarProps) {
   const hidden = moves.filter((m) => m.hidden).length
   const allHidden = moves.length > 0 && hidden === moves.length
+  const behaviorButton = (
+    <button
+      type="button"
+      data-testid="behavior-open"
+      aria-label="Behavior"
+      onClick={onBehavior}
+      className={`${btn} shrink-0 bg-[var(--app-card)] px-3 text-[#e8edf2] hover:bg-white/5`}
+    >
+      <SlidersHorizontal className="size-[18px]" aria-hidden />
+      <span>Behavior</span>
+    </button>
+  )
   return (
     <div
       data-testid="edit-bar"
@@ -31,11 +44,14 @@ export function RunsBar({ moves, open, onOpenChange, onSetAll }: RunsBarProps) {
       style={{ height: BAR_HEIGHT }}
     >
       {moves.length === 0 ? (
-        <p className="m-0 text-center text-xs text-[var(--app-muted)]">
-          No runs in this step. Tap a player, choose Run, then tap the pitch.
-        </p>
+        <div className="flex items-center gap-2">
+          <p className="m-0 min-w-0 flex-1 text-xs leading-snug text-[var(--app-muted)]">
+            No runs in this step. Tap a player, choose Run, then tap the pitch.
+          </p>
+          {behaviorButton}
+        </div>
       ) : (
-        <div className="grid grid-cols-2 gap-1.5">
+        <div className="grid grid-cols-[1.4fr_1fr_1fr] gap-1.5">
           <button
             type="button"
             data-testid="runs-toggle"
@@ -45,7 +61,7 @@ export function RunsBar({ moves, open, onOpenChange, onSetAll }: RunsBarProps) {
             className={`${btn} ${open ? 'bg-[#14b8a6] text-[#0f172a]' : 'bg-[var(--app-card)] text-[#e8edf2] hover:bg-white/5'}`}
           >
             <Route className="size-[18px]" aria-hidden />
-            <span>
+            <span className="truncate">
               Runs · {moves.length}
               {hidden > 0 && <span className="ml-1 opacity-70">({hidden} hidden)</span>}
             </span>
@@ -59,6 +75,7 @@ export function RunsBar({ moves, open, onOpenChange, onSetAll }: RunsBarProps) {
             {allHidden ? <Eye className="size-[18px]" aria-hidden /> : <EyeOff className="size-[18px]" aria-hidden />}
             {allHidden ? 'Show all' : 'Hide all'}
           </button>
+          {behaviorButton}
         </div>
       )}
     </div>

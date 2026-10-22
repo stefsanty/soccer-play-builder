@@ -22,7 +22,7 @@ import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
 import { neighbourStep } from '@/lib/engine/ballHolder'
 import { PitchMarkings } from './PitchMarkings'
 import { PitchSurface } from './PitchSurface'
-import { StepTextPanel } from './StepTextPanel'
+import { StepTextPanel, STRIP_HEIGHT } from './StepTextPanel'
 import { FormationGhosts, FormationToggle } from './Formation'
 import { BAR_HEIGHT } from './RunsPanel'
 
@@ -362,7 +362,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
 
   // Same strip as the Edit-mode step bar (same slot, same height): one pill per step; branches dashed.
   const stepBar = (
-    <div data-testid="step-bar" className={fill ? 'shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2' : 'rounded-lg bg-[var(--app-card)] p-3'}>
+    <div data-testid="step-bar" className={fill ? 'shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2' : 'rounded-lg bg-[var(--app-card)] p-3'} style={fill ? { height: STRIP_HEIGHT } : undefined}>
       <div className="flex items-center gap-1.5 overflow-x-auto" role="group" aria-label="Steps">
         {play.steps.map((st, i) => (
           <button

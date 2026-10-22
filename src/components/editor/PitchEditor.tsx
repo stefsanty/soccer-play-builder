@@ -11,7 +11,8 @@ import { useEditorStore, type EditorMode } from '@/lib/store/editorStore'
 import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { PitchMarkings } from './PitchMarkings'
 import { PitchSurface } from './PitchSurface'
-import { StepTextPanel } from './StepTextPanel'
+import { StepTextPanel, STRIP_HEIGHT } from './StepTextPanel'
+import { BehaviorPanel } from './BehaviorPanel'
 import { RunsBar, RunsList } from './RunsPanel'
 import { FormationGhosts, FormationToggle } from './Formation'
 import { AnimatedPitch } from './AnimatedPitch'
@@ -73,6 +74,9 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   // the run list opens in the step text panel; it belongs to the step it was opened on
   const [runsOpen, setRunsOpen] = useState(false)
   useEffect(() => { setRunsOpen(false) }, [currentStepIndex])
+  // the Behavior panel (defensive AI controls) takes over the bottom of the screen while it is open
+  const [behaviorOpen, setBehaviorOpen] = useState(false)
+  useEffect(() => { if (mode === 'preview') setBehaviorOpen(false) }, [mode])
   // Brief confirmation of the last action; `at` (meters) also pulses a marker on the pitch.
   const [flash, setFlash] = useState<{ id: number; text: string; at?: Pos } | null>(null)
   const announce = (text: string, at?: Pos) => setFlash({ id: Date.now(), text, at })
@@ -448,7 +452,10 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
         )}
         </div>
       )}
-      {mode !== 'preview' && step && (
+      {mode !== 'preview' && step && behaviorOpen && (
+        <BehaviorPanel step={step} stepIndex={currentStepIndex} onClose={() => setBehaviorOpen(false)} />
+      )}
+      {mode !== 'preview' && step && !behaviorOpen && (
         <StepTextPanel
           key={step.id}
           badge={step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex}
@@ -459,9 +466,9 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           body={runsOpen && step.moves.length > 0 ? <RunsList moves={step.moves} labelOf={labelOf} onToggle={(id) => toggleMoveHidden(id, currentStepIndex)} /> : undefined}
         />
       )}
-      {mode !== 'preview' && (
+      {mode !== 'preview' && !behaviorOpen && (
         <>
-          <div className="shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2" data-testid="step-bar">
+          <div className="shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2" data-testid="step-bar" style={{ height: STRIP_HEIGHT }}>
             <div className="flex items-center gap-1.5 overflow-x-auto" role="group" aria-label="Steps">
               {play?.steps.map((st, i) => (
                 <button
@@ -490,6 +497,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
               open={runsOpen}
               onOpenChange={setRunsOpen}
               onSetAll={(hidden) => setStepMovesHidden(currentStepIndex, hidden)}
+              onBehavior={() => setBehaviorOpen(true)}
             />
           )}
         </>

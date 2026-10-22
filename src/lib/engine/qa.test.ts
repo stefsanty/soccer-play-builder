@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import { toPlayInsert } from '@/lib/seed/defensiveAiTest'
 import { H, VMAX, getTimeline, sampleTimeline, type StepTimeline } from '@/lib/engine/simulator'
-import { computeAiTargets, lineDepth, type AiWorld, type AiWorldPlayer, type Team } from '@/lib/engine/ai'
+import { blendedLineDepth, computeAiTargets, lineDepth, resolveAiParams, type AiWorld, type AiWorldPlayer, type Team } from '@/lib/engine/ai'
 import { fl, mk, pr, zn } from '@/lib/engine/rules'
 import type { Play, PlayStep } from '@/lib/types/play'
 
@@ -43,7 +43,7 @@ describe('QA 0 — defensive shape and theory', () => {
     const ys = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((t) => backLineY(tl, t))
     // (a few metres of momentum from the end of step 4, where the block was still dropping to the ball at ST)
     expect(Math.max(...ys)).toBeLessThanOrEqual(ys[0] + 4)
-    expect(ys[0] - ys[8]).toBeGreaterThan(20) // ...then it climbs a long way
+    expect(ys[0] - ys[8]).toBeGreaterThan(12) // ...then it climbs a long way (to the in-possession line, ~68)
     expect(ys[8]).toBeLessThan(70) // and steps up to the (mid) maximum line, y = 105 - 42 = 63
   })
 
@@ -112,9 +112,11 @@ describe('QA 0 — defensive shape and theory', () => {
           holder = f.ball.holder
           heldSince = f.t
         }
-        // once the ball has settled with a player (a fast pass over the top can beat the block for a moment)
-        if (f.t < 1.2 || !f.ball.holder || f.t - heldSince < 0.5) continue
-        const goalSide = ['oLB', 'oLCB', 'oRCB', 'oRB', 'oGK'].filter((id) => f.players[id].y > f.ball.y - 0.5)
+        // once the ball has settled with a player for a second (a fast pass over the top can beat the block for a
+        // moment: it needs time to drop, limited by VMAX and the acceleration limit)
+        if (f.t < 1.2 || !f.ball.holder || f.t - heldSince < 1.0) continue
+        // level with the ball (within 2 m) counts: ST is carrying it inside the area, practically on the back line
+        const goalSide = ['oLB', 'oLCB', 'oRCB', 'oRB', 'oGK'].filter((id) => f.players[id].y > f.ball.y - 2)
         expect(goalSide.length, `step ${i + 1} t=${f.t.toFixed(1)}`).toBeGreaterThanOrEqual(3)
       }
     }
@@ -249,21 +251,24 @@ describe('QA 1 — core commands: press, mark, follow', () => {
 })
 
 describe('QA 2 — theoretical correctness of the positions', () => {
-  it('ball at y = 30 (back of OURS): the OPP line is lineD = 39.9 deep, i.e. y ≈ 65 at mid intensity', () => {
+  it('ball at y = 30 (back of OURS): ball-driven lineD is 39.9 (y 65); blended with the default line-height target (31.5) the OPP line is y ≈ 69', () => {
     const t = computeAiTargets(world({ x: 34, y: 30 }, { owner: 'ours' }), 'opp', emptyStep, ON)
     expect(lineDepth(75)).toBeCloseTo(39.9, 1)
-    expect(t.oLB.y).toBeCloseTo(105 - lineDepth(75), 6)
-    expect(t.oLB.y).toBeGreaterThan(64)
-    expect(t.oLB.y).toBeLessThan(66)
-    // the same ball at the other intensities
+    expect(t.oLB.y).toBeCloseTo(105 - blendedLineDepth(75, resolveAiParams({})), 6)
+    expect(t.oLB.y).toBeGreaterThan(68.5)
+    expect(t.oLB.y).toBeLessThan(70)
+    // the same ball at the other aggressiveness presets (higher aggressiveness = the ball weighs more and the max line rises)
     const y = (i: 'low' | 'high') => computeAiTargets(world({ x: 34, y: 30 }, { owner: 'ours' }), 'opp', emptyStep, { on: true, intensity: i }).oLB.y
-    expect(y('low')).toBeCloseTo(105 - lineDepth(75, 'low'), 6) // ~74.6
-    expect(y('high')).toBeCloseTo(105 - lineDepth(75, 'high'), 6) // ~53.7
+    expect(y('low')).toBeCloseTo(105 - blendedLineDepth(75, resolveAiParams({ intensity: 'low' })), 6)
+    expect(y('high')).toBeCloseTo(105 - blendedLineDepth(75, resolveAiParams({ intensity: 'high' })), 6)
+    expect(y('high')).toBeLessThan(y('low')) // a higher line
   })
 
-  it('ball at y = 80 (in front of the OPP box): the line is very deep, y ≥ 90', () => {
+  it('ball at y = 80 (in front of the OPP box): deep at the defaults (y ~ 83), very deep (y >= 90) with a low line height', () => {
     const t = computeAiTargets(world({ x: 34, y: 80 }, { owner: 'ours' }), 'opp', emptyStep, ON)
-    for (const id of ['oLB', 'oRB']) expect(t[id].y).toBeGreaterThanOrEqual(90)
+    for (const id of ['oLB', 'oRB']) expect(t[id].y).toBeGreaterThanOrEqual(82)
+    const deep = computeAiTargets(world({ x: 34, y: 80 }, { owner: 'ours' }), 'opp', emptyStep, { on: true, lineHeight: 0 })
+    for (const id of ['oLB', 'oRB']) expect(deep[id].y).toBeGreaterThanOrEqual(90)
     expect(Math.max(...['oLB', 'oLCB', 'oRCB', 'oRB'].map((id) => t[id].y))).toBeLessThan(100) // and off the goal line
   })
 
