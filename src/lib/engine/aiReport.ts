@@ -79,18 +79,21 @@ export interface AiReport {
   /** How often two shape-holding defenders end up on the same opponent, and how many opponents inside the
    *  block's area have nobody near them. */
   marking: { doubled: number; samples: number; unmarkedMean: number; inZoneMean: number }
+  /** The closest two team-mates ever actually get, as they move — not as their targets are placed. */
+  closest: { d: number; pair: string }
   width: { width: number; openWing: number; openWingVsWideAttacker: number; nearestToWideAttacker: number }[]
   phase1: { outlets: number; cut: number; cutters: string[]; backLineSpread: number }
 }
 
 /** Walks the seeded play's four defending steps frame by frame, which is as close to real use as a test gets. */
-function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: AiReport['cohesion']; marking: AiReport['marking'] } {
+function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: AiReport['cohesion']; marking: AiReport['marking']; closest: AiReport['closest'] } {
   const acc = new Map<string, { n: number; drift: number[]; off: number[]; worst: string }>()
   let assigned = 0
   let onLane = 0
   let worstOverstretch = 0
   let worstPair = '-'
   let doubled = 0
+  let closest = { d: Infinity, pair: '-' }
   let samples = 0
   let unmarkedTotal = 0
   let inZoneTotal = 0
@@ -148,6 +151,16 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
       const holders = Object.entries(full)
         .filter(([, v]) => ['line', 'wide', 'screen'].includes(v.role))
         .map(([, v]) => v)
+      // how close team-mates actually come to each other as they move
+      const oppIds = players.filter((q) => q.team === 'opp' && !/gk/i.test(q.label)).map((q) => q.id)
+      for (let i = 0; i < oppIds.length; i++) {
+        for (let j = i + 1; j < oppIds.length; j++) {
+          const a = players.find((q) => q.id === oppIds[i])!
+          const b = players.find((q) => q.id === oppIds[j])!
+          const dd = Math.hypot(a.x - b.x, a.y - b.y)
+          if (dd < closest.d) closest = { d: dd, pair: `${a.id}/${b.id}` }
+        }
+      }
       const slots = Object.keys(full).map((id) => HOME.get(id)!)
       let unmarked = 0
       let inZone = 0
@@ -184,6 +197,7 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
     roles,
     lanes: { assigned, onLane },
     cohesion: { worstOverstretch, worstPair },
+    closest,
     marking: { doubled, samples, unmarkedMean: samples ? unmarkedTotal / samples : 0, inZoneMean: samples ? inZoneTotal / samples : 0 },
   }
 }
@@ -227,8 +241,8 @@ function phase1(): AiReport['phase1'] {
 }
 
 export function aiReport(): AiReport {
-  const { roles, lanes, cohesion, marking } = roleCensus()
-  return { roles, lanes, cohesion, marking, width: widthSweep(), phase1: phase1() }
+  const { roles, lanes, cohesion, marking, closest } = roleCensus()
+  return { roles, lanes, cohesion, marking, closest, width: widthSweep(), phase1: phase1() }
 }
 
 /** The report as lines of text, for `npm run ai:report`. */
@@ -250,6 +264,7 @@ export function formatAiReport(r: AiReport = aiReport()): string[] {
       `(${(r.marking.doubled / r.marking.samples).toFixed(2)} per frame); of ${r.marking.inZoneMean.toFixed(1)} opponents inside the block's area, ` +
       `${r.marking.unmarkedMean.toFixed(1)} have nobody within ${DOUBLE_MARK_R} m`,
   )
+  out.push(`CLOSEST  two team-mates come within ${r.closest.d.toFixed(2)} m of each other (${r.closest.pair})`)
   out.push('')
   out.push('WIDTH  ball on the left touchline; "open wing" is the far-side space a long diagonal would find')
   out.push('  width   openWing   openWing(vs wide attacker)   nearest defender to him')

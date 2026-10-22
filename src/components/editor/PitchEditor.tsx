@@ -39,6 +39,10 @@ const MODES: { mode: EditorMode; label: string; Icon: LucideIcon; setupOnly?: bo
 ]
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+/** A press has to travel this far (metres) before it counts as a drag rather than a tap. Without it a tap with
+ *  a pixel of finger drift silently relocates the player — on the setup step that rewrites the formation the
+ *  whole AI is built from, and on any other step it leaves an accidental run behind. */
+const DRAG_MIN_M = 1.2
 /** Player positions as shown at the end of `stepIndex`: initial position, then the moves of every step on its
  *  chain (step 0 is setup; a branch step continues from the main step it branches off, not the one listed before it). */
 function positionsAt(play: Play, stepIndex: number): Map<string, Pos> {
@@ -69,7 +73,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const setPreviewTime = useEditorStore((s) => s.setPreviewTime)
 
   const svgRef = useRef<SVGSVGElement>(null)
-  const dragRef = useRef<{ id: string; moved: boolean; wasSelected: boolean } | null>(null)
+  const dragRef = useRef<{ id: string; moved: boolean; wasSelected: boolean; from: Pos } | null>(null)
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null)
   // First click of a pass/run gesture: the source player.
   const [pendingFrom, setPendingFrom] = useState<string | null>(null)
@@ -210,8 +214,8 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
       return
     }
     e.currentTarget.setPointerCapture(e.pointerId)
-    dragRef.current = { id, moved: false, wasSelected: selectedPlayerId === id }
     const pos = positions.get(id)
+    dragRef.current = { id, moved: false, wasSelected: selectedPlayerId === id, from: pos ?? { x: 0, y: 0 } }
     if (pos) setDrag({ id, ...pos })
   }
 
@@ -219,7 +223,8 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     if (!dragRef.current) return
     const m = toMeters(e)
     if (!m) return
-    dragRef.current.moved = true
+    const { from } = dragRef.current
+    if (Math.hypot(m.x - from.x, m.y - from.y) >= DRAG_MIN_M) dragRef.current.moved = true
     setDrag({ id: dragRef.current.id, ...m })
   }
 

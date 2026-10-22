@@ -1065,3 +1065,40 @@ describe('gravity: an opponent already covered does not pull a second defender',
     expect(Math.abs(t.oD2.x - 44)).toBeLessThan(1.5)
   })
 })
+
+describe('a bunched formation is spread before the block is built on it', () => {
+  it('two slots saved almost on top of each other still end up a sensible distance apart', () => {
+    // A play can be saved with two players nearly on the same spot. Every slot comes from those positions,
+    // so without spreading them first the pin that keeps a central player central would hold BOTH of them in
+    // the same window and separation could never fully undo it.
+    const players: AiWorldPlayer[] = [
+      { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 99, home: [34, 99] },
+      { id: 'oA', team: 'opp', label: 'oA', x: 33, y: 80, home: [33, 80] },
+      { id: 'oB', team: 'opp', label: 'oB', x: 35, y: 80, home: [35, 80] },
+      { id: 'C', team: 'ours', label: 'C', x: 34, y: 30, home: [34, 30] },
+    ]
+    const t = computeAiTargets({ players, ball: { x: 34, y: 30 }, memory: {}, owner: 'ours', focus: 'C' }, 'opp', emptyStep, ON)
+    expect(Math.abs(t.oA.x - t.oB.x)).toBeGreaterThanOrEqual(6.5 - 1e-6) // minSep at the default width
+  })
+})
+
+describe('personal space: team-mates never stand on the same spot', () => {
+  it('holds even when both are lagging a long way behind their targets', () => {
+    // Targets are kept apart by the AI, but a player only STEERS towards his — two who are both behind can
+    // drift together while their targets stay a dozen metres apart. This is the case that produced two
+    // centre-backs on one blade of grass; see PERSONAL in the simulator.
+    const play = seeded()
+    const tl = getTimeline(play, 0)
+    const ids = play.players.filter((p) => p.team === 'opp' && !/gk/i.test(p.label)).map((p) => p.id)
+    let worst = Infinity
+    for (let t = 0.25; t <= play.steps[0].duration; t += 0.25) {
+      const f = sampleTimeline(tl, t)
+      for (let i = 0; i < ids.length; i++) {
+        for (let j = i + 1; j < ids.length; j++) {
+          worst = Math.min(worst, Math.hypot(f.players[ids[i]].x - f.players[ids[j]].x, f.players[ids[i]].y - f.players[ids[j]].y))
+        }
+      }
+    }
+    expect(worst).toBeGreaterThan(4)
+  })
+})

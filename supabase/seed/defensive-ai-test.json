@@ -150,21 +150,21 @@
       "team": "opp",
       "label": "oLW",
       "x": 54,
-      "y": 72
+      "y": 42
     },
     {
       "id": "oRW",
       "team": "opp",
       "label": "oRW",
       "x": 8,
-      "y": 72
+      "y": 42
     },
     {
       "id": "oST",
       "team": "opp",
       "label": "oST",
       "x": 34,
-      "y": 72
+      "y": 35
     }
   ],
   "steps": [

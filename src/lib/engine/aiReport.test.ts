@@ -17,6 +17,11 @@ describe('AI report', () => {
     expect(report.lanes.onLane).toBe(report.lanes.assigned)
   })
 
+  it('team-mates never end up standing on the same spot', () => {
+    // not their targets — where they actually are, as they move
+    expect(report.closest.d, `closest pair: ${report.closest.pair}`).toBeGreaterThan(4)
+  })
+
   it('nobody is left stretched far from his formation neighbours', () => {
     expect(report.cohesion.worstOverstretch).toBeLessThanOrEqual(6)
   })

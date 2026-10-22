@@ -34,7 +34,16 @@ const BRAKE = 0.85
 /** Chase gain per rule type: desired speed = min(VMAX, distance * gain). */
 export const GAINS = { zone: 2.5, mark: 2.2, follow: 2.2, press: 4.0, ai: 2.2 } as const
 const FACE_RATE = 7 // rad/s
-const SEPARATION = 1.8 // m, defenders closer than this are pushed apart
+const SEPARATION = 1.8 // m, defenders closer than this are pushed apart outright — bodies cannot overlap
+/**
+ * Team-mates inside this ease apart. Targets are kept apart by the AI, but a player only ever STEERS towards
+ * his target, so two who are both lagging can drift together even while their targets stay a dozen metres
+ * apart — which is how two centre-backs end up standing on the same blade of grass. There is no situation
+ * where a defender wants a team-mate's exact position, so the easing is on the positions themselves.
+ */
+const PERSONAL = 5
+/** ...at a walking pace, so it nudges players apart over a moment instead of snapping them. */
+const PERSONAL_V = 5.0 // m/s
 const MOVING = 0.8 // m/s, our players face their run direction above this speed
 
 const UP = -Math.PI / 2
@@ -448,13 +457,14 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
         const dx = b.x - a.x
         const dy = b.y - a.y
         const d = Math.hypot(dx, dy)
-        if (d < SEPARATION && d > 1e-6) {
-          const push = (SEPARATION - d) / 2
-          a.x -= (dx / d) * push
-          a.y -= (dy / d) * push
-          b.x += (dx / d) * push
-          b.y += (dy / d) * push
-        }
+        if (d >= PERSONAL || d <= 1e-6) continue
+        // inside SEPARATION they are overlapping and are separated outright; beyond it they merely ease apart
+        const want = (Math.min(PERSONAL, SEPARATION + (PERSONAL - SEPARATION)) - d) / 2
+        const push = d < SEPARATION ? (SEPARATION - d) / 2 : Math.min(want, PERSONAL_V * H)
+        a.x -= (dx / d) * push
+        a.y -= (dy / d) * push
+        b.x += (dx / d) * push
+        b.y += (dy / d) * push
       }
     }
 
