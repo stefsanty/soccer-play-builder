@@ -66,6 +66,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const updatePlayerPosition = useEditorStore((s) => s.updatePlayerPosition)
   const toggleMoveHidden = useEditorStore((s) => s.toggleMoveHidden)
   const setStepMovesHidden = useEditorStore((s) => s.setStepMovesHidden)
+  const setPreviewTime = useEditorStore((s) => s.setPreviewTime)
 
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<{ id: string; moved: boolean; wasSelected: boolean } | null>(null)
@@ -170,8 +171,9 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const goToStep = (i: number) => {
     if (i !== currentStepIndex) haptic(8)
     setCurrentStep(i)
-    // step 0 is setup-only: drop pass/run mode on entry
+    // step 0 is setup-only: drop pass/run mode and close behavior panel on entry
     if (i === 0 && (mode === 'pass' || mode === 'run')) setMode('select')
+    if (i === 0) setBehaviorOpen(false)
   }
   const handleAddStep = () => {
     addStep()
@@ -265,7 +267,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     <div className="flex min-h-0 w-full flex-1 flex-col">
       {mode === 'preview' && play ? (
         <AnimatedPitch fill play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep}
-          onSwitchToEdit={() => { haptic(10); selectPlayer(null); setMode('select') }} />
+          onSwitchToEdit={() => { haptic(10); selectPlayer(null); setMode('select'); setPreviewTime(0) }} />
       ) : (
         <div className="relative min-h-0 flex-1 bg-[var(--pitch)]">
         <svg
@@ -464,9 +466,9 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
       {mode !== 'preview' && step && !behaviorOpen && (
         <StepTextPanel
           key={step.id}
-          badge={step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex}
+          badge={isSetupStep ? 'S' : (step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex)}
           title={step.title}
-          stepLabel={`Step ${currentStepIndex + 1} of ${play?.steps.length ?? 1}`}
+          stepLabel={isSetupStep ? 'Starting positions' : `Step ${currentStepIndex + 1} of ${play?.steps.length ?? 1}`}
           ours={step.narrativeOurs}
           opp={step.narrativeOpp}
           body={runsOpen && step.moves.length > 0 ? <RunsList moves={step.moves} labelOf={labelOf} onToggle={(id) => toggleMoveHidden(id, currentStepIndex)} /> : undefined}

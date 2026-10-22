@@ -56,7 +56,38 @@ export const useEditorStore = create<EditorState>()(
     previewTime: 0,
     showFormation: true,
 
-    setPlay: (play) => set((s) => { s.play = play }),
+    setPlay: (play) => set((s) => {
+      const step0 = play.steps[0]
+      const hasContent = step0 && (
+        step0.passes.length > 0 ||
+        step0.moves.length > 0 ||
+        Object.keys(step0.defenderRules).length > 0 ||
+        (step0.faceTargets?.length ?? 0) > 0
+      )
+      if (hasContent) {
+        const setupStep: PlayStep = {
+          id: crypto.randomUUID(),
+          index: 0,
+          title: 'Setup',
+          duration: 0,
+          narrativeOurs: [],
+          narrativeOpp: [],
+          moves: [],
+          passes: [],
+          defenderRules: {},
+          faceTargets: [],
+        }
+        const shifted = play.steps.map((st, i) => ({
+          ...st,
+          index: i + 1,
+          ...(st.isAltBranch && st.altFrom !== undefined ? { altFrom: st.altFrom + 1 } : {}),
+        }))
+        s.play = { ...play, steps: [setupStep, ...shifted] }
+        s.isDirty = true
+      } else {
+        s.play = play
+      }
+    }),
     setMode: (mode) => set((s) => { s.mode = mode }),
     selectPlayer: (id) => set((s) => { s.selectedPlayerId = id }),
     setCurrentStep: (index) => set((s) => { s.currentStepIndex = index; s.isPlaying = false; s.previewTime = 0 }),
