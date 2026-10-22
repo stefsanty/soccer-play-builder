@@ -303,16 +303,19 @@ describe('QA 2 — theoretical correctness of the positions', () => {
     expect(distPointToSegment([screen.x, screen.y], [34, 20], [34, 50])).toBeLessThanOrEqual(LANE_BLOCK_R)
   })
 
-  it('ball far to the left: the right side of the block narrows a long way in', () => {
+  it('ball far to the left: the far flank holds its width instead of collapsing across', () => {
     const w = world({ x: 8, y: 60 }, { owner: 'ours' })
     const t = computeAiTargets(w, 'opp', emptyStep, ON)
-    for (const id of ['oLB', 'oLW']) { // the far side from a ball on the left (OPP face down: their left is screen right)
-      expect(homeOf(w, id)[0] - t[id].x).toBeGreaterThan(15)
-    }
-    // ...and the whole block shifts towards the ball
+    // the far side from a ball on the left (OPP face down: their left is screen right) stays out there, so a
+    // long diagonal has somebody to beat
+    for (const id of ['oLB', 'oLW']) expect(homeOf(w, id)[0] - t[id].x).toBeLessThan(10)
     const field = Object.keys(t).filter((id) => t[id].role !== 'gk')
-    const mean = field.reduce((s, id) => s + (t[id].x - homeOf(w, id)[0]), 0) / field.length
-    expect(mean).toBeLessThan(-5)
+    const rightmost = Math.max(...field.map((id) => t[id].x))
+    expect(68 - rightmost).toBeLessThan(18) // no open wing to switch the play into
+    // the men near the ball still come across, so the ball side is compact
+    const nearBall = field.filter((id) => homeOf(w, id)[0] < 34)
+    const mean = nearBall.reduce((s, id) => s + (t[id].x - homeOf(w, id)[0]), 0) / nearBall.length
+    expect(mean).toBeLessThan(0)
   })
 })
 
@@ -356,8 +359,10 @@ describe('QA 3 — authored rules mixed with the AI', () => {
     expect(opp[0]).toBe('oRB') // the authored presser is on him (he arrives ~5.4 s: 20 m from a standing start at VMAX)
     expect(dist('oRB')).toBeLessThan(11)
     expect(dist(opp[1])).toBeGreaterThan(9) // nobody doubles up
-    // and he is closing steadily
-    expect(dist('oRB')).toBeLessThan(Math.hypot(sampleTimeline(tl, 3.5).players.oRB.x - 12, sampleTimeline(tl, 3.5).players.oRB.y - 65) - 5)
+    // and he closed onto him over the step (LW is in his flank, so he was tracking from the start and gets
+    // there well before the authored press alone would have carried him)
+    const early = sampleTimeline(tl, 0.5)
+    expect(dist('oRB')).toBeLessThan(Math.hypot(early.players.oRB.x - early.players.LW.x, early.players.oRB.y - early.players.LW.y) - 2)
   })
 
   it('an attacker already pressed / marked by an authored rule is not also lane-screened', () => {

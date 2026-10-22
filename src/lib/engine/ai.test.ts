@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AiWorld, GAIN, INTENSITY, LANE_BLOCK_R, MIN_LANE, NEIGHBOUR_SLACK, PRESETS, WIDE_LANE_REACH, blendedLineDepth, blockShift, computeAiTargets, distPointToSegment, lineDepth, passingLaneOpen, resolveAiParams, type AiWorldPlayer, type XY } from '@/lib/engine/ai'
+import { AiWorld, FLANK_ZONE, GAIN, INTENSITY, LANE_BLOCK_R, MIN_LANE, NEIGHBOUR_SLACK, PRESETS, WIDE_HOLD, WIDE_LANE_REACH, blendedLineDepth, blockShift, computeAiTargets, distPointToSegment, lineDepth, passingLaneOpen, resolveAiParams, type AiWorldPlayer, type XY } from '@/lib/engine/ai'
 import { EXIT_MARGIN, HANDOFF_COOLDOWN, clampIntoBounds, contains, handoffCost, newFollowTrack, pickHandoff, trackExit } from '@/lib/engine/follow'
 import { H, getTimeline, sampleTimeline } from '@/lib/engine/simulator'
 import { ai, fl, mk, pr, zn } from '@/lib/engine/rules'
@@ -57,9 +57,9 @@ describe('computeAiTargets', () => {
     for (const id of ['oLB', 'oLCB', 'oRCB', 'oRB']) {
       expect(t[id].y).toBeCloseTo(line, 6)
       expect(t[id].y).toBeGreaterThan(30) // goal-side of the ball (towards y = 105)
-      // shiftX ~ 0 (the default width only holds wide players 9 m in from the touchline: oRB 8 -> 9, and
-      // cohesion may nudge a couple of metres sideways to keep contact with a neighbour)
-      expect(Math.abs(t[id].x - homeOf(w, id)[0])).toBeLessThanOrEqual(3)
+      // shiftX ~ 0, so what lateral movement there is comes from a flank slot getting across an attacker
+      // standing in it (oRB on LW) and from cohesion keeping contact with a neighbour
+      expect(Math.abs(t[id].x - homeOf(w, id)[0])).toBeLessThanOrEqual(4.5)
     }
     expect(blockShift(34)).toBe(0)
     // and the same for the team defending y = 0: ball 30 m from their goal
@@ -78,12 +78,13 @@ describe('computeAiTargets', () => {
     const t = computeAiTargets(w, 'opp', emptyStep, ON)
     const shiftX = blockShift(10)
     expect(shiftX).toBeLessThan(-3)
-    // wide players on the ball side take the full shift, far side tucks in even more
-    expect(t.oLB.x).toBeLessThan(homeOf(w, 'oLB')[0] - 3)
-    // oRW (home x = 8) is on the ball side already: held at the width limit, 3 m + the default inward 6 m
-    // (the open lanes all run well outside his flank, so he holds it instead of stepping onto one)
-    expect(t.oRW.x).toBeCloseTo(3 + DEFAULTS.widthInward, 6)
+    // the centre-backs come across to the ball: the near one a long way, the far one barely at all
     expect(t.oRCB.x).toBeLessThan(homeOf(w, 'oRCB')[0] - 3)
+    expect(homeOf(w, 'oLCB')[0] - t.oLCB.x).toBeLessThan(3)
+    // the far flank holds its ground instead of being dragged across — that is the wing a long ball would find
+    expect(Math.abs(t.oLB.x - homeOf(w, 'oLB')[0])).toBeLessThanOrEqual(WIDE_HOLD.loose)
+    // the near flank holds his too: he denies the wide outlet, he does not join the press
+    expect(Math.abs(t.oRW.x - homeOf(w, 'oRW')[0])).toBeLessThanOrEqual(WIDE_HOLD.loose)
     // central players stay central: at most 3 m from home
     // (a player picked as presser / cover / lane screen is placed by that job instead of by the block)
     const blockCentral = ['oLCB', 'oST', 'oCAM'].filter((id) => ['line', 'wide'].includes(t[id].role))
@@ -91,9 +92,6 @@ describe('computeAiTargets', () => {
     for (const id of blockCentral) {
       expect(Math.abs(t[id].x - homeOf(w, id)[0])).toBeLessThanOrEqual(3 + 1e-9)
     }
-    const field = Object.keys(t).filter((id) => id !== 'oGK')
-    const meanShift = field.reduce((s, id) => s + (t[id].x - homeOf(w, id)[0]), 0) / field.length
-    expect(meanShift).toBeLessThan(-3)
   })
 
   describe('ball at (34, 85)', () => {
@@ -531,6 +529,69 @@ describe('lane cutters: the rule, on the test play phase 1 (a press on the blue 
   })
 })
 
+describe('width: the block keeps a flank for the long diagonal to beat', () => {
+  /** How much of the far touchline is left with nobody in it — the space a switch of play would find. */
+  const openWing = (t: Record<string, { x: number; role: string }>) =>
+    68 - Math.max(...Object.values(t).filter((v) => v.role !== 'gk').map((v) => v.x))
+
+  it('a wider setting leaves less of the far wing open, not more', () => {
+    const at = (width: number) => {
+      const w = world({ x: 6, y: 60 }, { owner: 'ours' })
+      Object.assign(w.players.find((p) => p.id === 'RCM')!, { x: 64, y: 58 }) // somebody to hold the wing against
+      return computeAiTargets(w, 'opp', emptyStep, { on: true, width })
+    }
+    const gaps = [0, 50, 100].map((width) => openWing(at(width)))
+    expect(gaps[2]).toBeLessThan(gaps[0]) // width 100 holds the widest shape, so the smallest gap
+    expect(gaps[1]).toBeLessThanOrEqual(gaps[0])
+    for (const g of gaps) expect(g).toBeLessThan(20)
+  })
+
+  it('the far flank is not dragged across the pitch at any width', () => {
+    for (const width of [0, 50, 100]) {
+      const w = world({ x: 6, y: 60 }, { owner: 'ours' })
+      const t = computeAiTargets(w, 'opp', emptyStep, { on: true, width })
+      for (const id of ['oLB', 'oLW']) {
+        expect(homeOf(w, id)[0] - t[id].x, `${id} at width ${width}`).toBeLessThanOrEqual(WIDE_HOLD.loose)
+      }
+    }
+  })
+
+  it('the pull towards the ball dies away with distance: the near side slides, the far side does not', () => {
+    const w = world({ x: 6, y: 60 }, { owner: 'ours' })
+    const t = computeAiTargets(w, 'opp', emptyStep, ON)
+    const drift = (id: string) => Math.abs(t[id].x - homeOf(w, id)[0])
+    // oRCB's slot is on the ball side, oLCB's is on the far side; both are centre-backs under the same rule
+    expect(drift('oRCB')).toBeGreaterThan(drift('oLCB') + 2)
+  })
+
+  it('width sets a floor under the spread: at max width a flank slot is pinned near its formation x', () => {
+    const w = world({ x: 6, y: 60 }, { owner: 'ours' })
+    const tight = computeAiTargets(w, 'opp', emptyStep, { on: true, width: 100 })
+    for (const id of ['oLB', 'oLW', 'oRW']) {
+      expect(Math.abs(tight[id].x - homeOf(w, id)[0]), id).toBeLessThanOrEqual(WIDE_HOLD.tight + FLANK_ZONE * 0.65 + 1e-9)
+    }
+  })
+
+  it('an attacker standing in a flank outranks the ball on the other side of the pitch', () => {
+    const w = world({ x: 6, y: 60 }, { owner: 'ours' })
+    // park an attacker out on the far right wing: the long-ball target
+    Object.assign(w.players.find((p) => p.id === 'RCM')!, { x: 64, y: 58 })
+    const t = computeAiTargets(w, 'opp', emptyStep, ON)
+    const nearest = Object.entries(t)
+      .filter(([, v]) => v.role !== 'gk')
+      .map(([id, v]) => ({ id, d: Math.hypot(v.x - 64, v.y - 58) }))
+      .sort((a, b) => a.d - b.d)[0]
+    expect(nearest.d).toBeLessThan(12) // somebody is across him, though the ball is 58 m away
+    expect(t[nearest.id].x).toBeGreaterThan(50) // and he got there by staying wide, not by tucking in
+  })
+
+  it('a centre-back still slides with the ball — the hold is for flank slots only', () => {
+    const w = world({ x: 6, y: 60 }, { owner: 'ours' })
+    const t = computeAiTargets(w, 'opp', emptyStep, ON)
+    expect(homeOf(w, 'oRCB')[0] - t.oRCB.x).toBeGreaterThan(3)
+  })
+})
+
 describe('cohesion: a player holding shape stays with his formation neighbours', () => {
   /** Each outfield player's two nearest neighbours in the formation, and the spacing the formation gives them. */
   const neighboursOf = (w: AiWorld, team: 'ours' | 'opp') => {
@@ -907,7 +968,10 @@ describe('the AI inside the simulation (seeded "Defensive AI test")', () => {
     const before = sampleTimeline(tl, 1.7)
     const after = sampleTimeline(tl, 4.5)
     const d = (f: typeof before) => Math.hypot(f.players.oRB.x - f.players.LW.x, f.players.oRB.y - f.players.LW.y)
-    expect(d(after)).toBeLessThan(d(before) - 3)
+    // He is tight on LW once the press fires. He was already tracking him before it did — LW stands in his
+    // flank, so the AI had him across the wide outlet rather than sliding away to the ball.
+    expect(d(after)).toBeLessThan(1.5)
+    expect(d(after)).toBeLessThan(d(before))
   })
 
   it('the AI engages only after its reaction time', () => {

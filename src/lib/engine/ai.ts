@@ -112,6 +112,22 @@ export const NEIGHBOUR_SLACK = 5
 const COHESION = 0.5
 /** How many formation neighbours each player is tied to. */
 const NEIGHBOURS = 2
+/** A slot nearer the middle than this is a central one, and is held there. */
+const CENTRAL_OFF = 10
+/** A slot this far off centre is a flank slot: its job is the wide outlet, so it holds its lateral position.
+ *  Between the two sits a centre-back, who slides with the ball under neither rule. */
+const WIDE_OFF = 16
+/** How far towards the centre a flank player may ever come off his slot: at width 100 / at width 0. */
+export const WIDE_HOLD = { tight: 2, loose: 10 } as const
+/**
+ * The sideways slide is full strength within `full` metres of the ball and has died away by `none`. `floor` is
+ * how much of it the far side still feels at width 0, so a compact block narrows as a whole.
+ */
+export const BALL_PULL = { full: 12, none: 40, floor: 0.3 } as const
+/** How far a flank player goes to get across an attacker who is standing in his flank. */
+const FLANK_TRACK = 0.65
+/** An attacker this close to a flank player's slot, on his side, is his to deal with. */
+export const FLANK_ZONE = 14
 
 const PITCH_W = 68
 const PITCH_H = 105
@@ -349,10 +365,31 @@ export function computeAiTargets(
     }
     depth = Math.min(Math.max(2, depth), PITCH_H - 25) // never into the keeper's area from the other end either
 
-    let x = p.home[0] + shiftX
+    // The slide towards the ball dies away with distance from it: the two or three men around the ball come
+    // across, the far side of the block does not. Sliding the whole block equally is what opens the far wing
+    // up for one long diagonal.
+    // A compact setting keeps a floor under it so the whole block still narrows a little; at full width the
+    // far side feels nothing at all and simply holds its ground.
+    const toBall = dist([p.x, p.y], [ball.x, ball.y])
+    const falloff = 1 - clamp((toBall - BALL_PULL.full) / (BALL_PULL.none - BALL_PULL.full), 0, 1)
+    const pull = Math.max(falloff, lerp(BALL_PULL.floor, 0, P.width / 100))
+    let x = p.home[0] + shiftX * pull
+
     const off = p.home[0] - CENTRE_X
-    if (Math.abs(off) >= 10 && off * (ball.x - CENTRE_X) < 0) x += (ball.x - p.home[0]) * 0.2 // far side tucks in
-    if (Math.abs(off) < 10) x = clamp(x, p.home[0] - 3, p.home[0] + 3) // central players stay central
+    if (Math.abs(off) < CENTRAL_OFF) {
+      x = clamp(x, p.home[0] - 3, p.home[0] + 3) // central players stay central
+    } else if (Math.abs(off) >= WIDE_OFF) {
+      // A flank slot denies the wide outlet, so an attacker standing in that flank outranks the ball: get
+      // across him. Nothing else out here is worth leaving the flank for.
+      const threat = foes
+        .filter((a) => Math.sign(a.x - CENTRE_X) === Math.sign(off) && Math.abs(a.x - p.home[0]) <= FLANK_ZONE)
+        .sort((a, b) => Math.abs(a.x - p.home[0]) - Math.abs(b.x - p.home[0]))[0]
+      if (threat) x = lerp(p.home[0], threat.x, FLANK_TRACK)
+      // Width sets how far in he may ever come — a floor under the block's spread, not just a ceiling. Going
+      // the other way, out towards his own touchline, only the width limit below stops him.
+      const inwards = lerp(WIDE_HOLD.loose, WIDE_HOLD.tight, P.width / 100)
+      x = off < 0 ? Math.min(x, p.home[0] + inwards) : Math.max(x, p.home[0] - inwards)
+    }
     // width: the formation holds between 3 m + inward from the touchlines (inward is 0 at width 100)
     block.set(p.id, [clamp(x, 3 + P.widthInward, PITCH_W - 3 - P.widthInward), yOf(depth)])
   }
