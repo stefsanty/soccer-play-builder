@@ -87,7 +87,7 @@
       "team": "ours",
       "label": "ST",
       "x": 34,
-      "y": 80
+      "y": 88
     },
     {
       "id": "oGK",
@@ -100,42 +100,42 @@
       "id": "oLB",
       "team": "opp",
       "label": "oLB",
-      "x": 14,
+      "x": 54,
       "y": 78
     },
     {
       "id": "oLCB",
       "team": "opp",
       "label": "oLCB",
-      "x": 28,
+      "x": 40,
       "y": 82
     },
     {
       "id": "oRCB",
       "team": "opp",
       "label": "oRCB",
-      "x": 48,
+      "x": 20,
       "y": 82
     },
     {
       "id": "oRB",
       "team": "opp",
       "label": "oRB",
-      "x": 60,
+      "x": 8,
       "y": 78
     },
     {
       "id": "oCML",
       "team": "opp",
       "label": "oCML",
-      "x": 22,
+      "x": 46,
       "y": 62
     },
     {
       "id": "oCMR",
       "team": "opp",
       "label": "oCMR",
-      "x": 52,
+      "x": 16,
       "y": 62
     },
     {
@@ -149,14 +149,14 @@
       "id": "oLW",
       "team": "opp",
       "label": "oLW",
-      "x": 14,
+      "x": 54,
       "y": 72
     },
     {
       "id": "oRW",
       "team": "opp",
       "label": "oRW",
-      "x": 60,
+      "x": 8,
       "y": 72
     },
     {
@@ -211,7 +211,7 @@
       "duration": 5,
       "narrativeOurs": [
         "RB finds LW making a wide run.",
-        "The nearest OPP defender (oLCB) presses while the block shifts."
+        "The nearest OPP defender (oRB, the full-back on LW’s flank) presses while the block shifts."
       ],
       "narrativeOpp": [],
       "moves": [],
@@ -230,7 +230,7 @@
         }
       ],
       "defenderRules": {
-        "oLCB": [
+        "oRB": [
           {
             "type": "press",
             "att": "LW",

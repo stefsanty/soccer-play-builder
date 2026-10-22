@@ -17,6 +17,7 @@ interface EditorState {
   isDirty: boolean
   isPlaying: boolean
   previewTime: number   // current time within step during preview
+  showFormation: boolean   // faint markers of the OPP starting shape on the pitch
 
   // Actions
   setPlay: (play: Play) => void
@@ -33,6 +34,7 @@ interface EditorState {
   toggleMoveHidden: (playerId: string, stepIndex: number) => void
   /** Hide or show every move arrow of a step. */
   setStepMovesHidden: (stepIndex: number, hidden: boolean) => void
+  setShowFormation: (v: boolean) => void
   setIsPlaying: (v: boolean) => void
   setPreviewTime: (t: number) => void
   markSaved: () => void
@@ -47,6 +49,7 @@ export const useEditorStore = create<EditorState>()(
     isDirty: false,
     isPlaying: false,
     previewTime: 0,
+    showFormation: true,
 
     setPlay: (play) => set((s) => { s.play = play }),
     setMode: (mode) => set((s) => { s.mode = mode }),
@@ -119,6 +122,7 @@ export const useEditorStore = create<EditorState>()(
       }
       s.isDirty = true
     }),
+    setShowFormation: (v) => set((s) => { s.showFormation = v }),
     setIsPlaying: (v) => set((s) => { s.isPlaying = v }),
     setPreviewTime: (t) => set((s) => { s.previewTime = t }),
     markSaved: () => set((s) => { s.isDirty = false }),

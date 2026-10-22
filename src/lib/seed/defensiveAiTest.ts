@@ -7,11 +7,12 @@ import { fl, pr } from '../engine/rules.ts'
 
 const ours: [string, number, number][] = [
   ['GK', 34, 5], ['LB', 14, 20], ['LCB', 26, 25], ['RCB', 46, 25], ['RB', 60, 20],
-  ['LCM', 22, 45], ['CM', 34, 48], ['RCM', 52, 45], ['LW', 12, 65], ['CAM', 34, 68], ['ST', 34, 80],
+  ['LCM', 22, 45], ['CM', 34, 48], ['RCM', 52, 45], ['LW', 12, 65], ['CAM', 34, 68], ['ST', 34, 88], // ST inside the OPP area
 ]
+// OPP face down the pitch, so their "left" is screen right: the OPP shape is the OURS layout mirrored (x -> 68 - x).
 const opp: [string, number, number][] = [
-  ['oGK', 34, 100], ['oLB', 14, 78], ['oLCB', 28, 82], ['oRCB', 48, 82], ['oRB', 60, 78],
-  ['oCML', 22, 62], ['oCMR', 52, 62], ['oCAM', 34, 62], ['oLW', 14, 72], ['oRW', 60, 72], ['oST', 34, 72],
+  ['oGK', 34, 100], ['oLB', 54, 78], ['oLCB', 40, 82], ['oRCB', 20, 82], ['oRB', 8, 78],
+  ['oCML', 46, 62], ['oCMR', 16, 62], ['oCAM', 34, 62], ['oLW', 54, 72], ['oRW', 8, 72], ['oST', 34, 72],
 ]
 
 type Pass = [from: string, to: string, t0: number, t1: number]
@@ -61,8 +62,8 @@ export function toPlayInsert(): PlayInsert {
 
       step(1, 'Wide pass: RB to LW, who is wide open', 5, [
         'RB finds LW making a wide run.',
-        'The nearest OPP defender (oLCB) presses while the block shifts.',
-      ], [['RCB', 'RB', 0.2, 1.4], ['RB', 'LW', 1.8, 3.5]], { defenderRules: { oLCB: [pr('LW', 1.8)] } }),
+        'The nearest OPP defender (oRB, the full-back on LW’s flank) presses while the block shifts.',
+      ], [['RCB', 'RB', 0.2, 1.4], ['RB', 'LW', 1.8, 3.5]], { defenderRules: { oRB: [pr('LW', 1.8)] } }),
 
       step(2, 'Ball to CAM in front of the box', 6, [
         'CM plays to CAM who is in a dangerous central position.',

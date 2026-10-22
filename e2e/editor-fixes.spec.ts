@@ -9,10 +9,13 @@ const rotation = async (page: Page, testId: string) => {
 async function grass(page: Page, nth = 0): Promise<[number, number]> {
   const box = (await page.getByTestId('pitch-svg').boundingBox())!
   let found = 0
-  for (let y = 520; y < 700; y += 20) {
-    for (let x = 40; x < 340; x += 25) {
-      const hit = await page.evaluate(([px, py]) => document.elementFromPoint(px, py)?.closest('[data-testid]')?.getAttribute('data-testid'), [box.x + x, box.y + y])
-      if (hit === 'pitch-svg' && found++ === nth) return [box.x + x, box.y + y]
+  // scan the lower half of the pitch (relative to its size) for a spot with nothing on top of it
+  for (let fy = 0.5; fy < 0.96; fy += 0.03) {
+    for (let fx = 0.08; fx < 0.93; fx += 0.04) {
+      const px = box.x + box.width * fx
+      const py = box.y + box.height * fy
+      const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('[data-testid]')?.getAttribute('data-testid'), [px, py])
+      if (hit === 'pitch-svg' && found++ === nth) return [px, py]
     }
   }
   throw new Error('no free grass found')

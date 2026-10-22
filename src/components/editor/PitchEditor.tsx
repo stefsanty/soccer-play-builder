@@ -11,8 +11,9 @@ import { useEditorStore, type EditorMode } from '@/lib/store/editorStore'
 import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { PitchMarkings } from './PitchMarkings'
 import { PitchSurface } from './PitchSurface'
-import { StepNote } from './StepNote'
-import { RunsPanel } from './RunsPanel'
+import { StepTextPanel } from './StepTextPanel'
+import { RunsBar, RunsList } from './RunsPanel'
+import { FormationGhosts, FormationToggle } from './Formation'
 import { AnimatedPitch } from './AnimatedPitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import type { Play } from '@/lib/types/play'
@@ -69,6 +70,9 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null)
   // First click of a pass/run gesture: the source player.
   const [pendingFrom, setPendingFrom] = useState<string | null>(null)
+  // the run list opens in the step text panel; it belongs to the step it was opened on
+  const [runsOpen, setRunsOpen] = useState(false)
+  useEffect(() => { setRunsOpen(false) }, [currentStepIndex])
   // Brief confirmation of the last action; `at` (meters) also pulses a marker on the pitch.
   const [flash, setFlash] = useState<{ id: number; text: string; at?: Pos } | null>(null)
   const announce = (text: string, at?: Pos) => setFlash({ id: Date.now(), text, at })
@@ -274,6 +278,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           </defs>
           <PitchSurface />
           <PitchMarkings />
+          {play && <FormationGhosts players={play.players} />}
 
           {prevPositions && step?.moves.map((m) => {
             const from = prevPositions.get(m.playerId)
@@ -377,38 +382,33 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             </g>
           )}
         </svg>
-        <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col items-center gap-2">
-          {step && <StepNote key={step.id} badge={step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex} title={step.title} detail={step.narrativeOurs.join(' ')} />}
-          {step && (
-            <RunsPanel
-              key={`runs-${step.id}`}
-              lead={
-                holderId && (
-                  <div data-testid="ball-chip" className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-[rgba(11,16,21,0.88)] px-3 py-1 text-xs font-semibold text-[#e8edf2] shadow-lg backdrop-blur-md">
-                    <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />
-                    Ball: {labelOf(holderId)}
-                  </div>
-                )
-              }
-              moves={step.moves}
-              labelOf={labelOf}
-              onToggle={(id) => toggleMoveHidden(id, currentStepIndex)}
-              onSetAll={(hidden) => setStepMovesHidden(currentStepIndex, hidden)}
-            />
-          )}
-          {flash && (
-            <div key={flash.id} role="status" data-testid="action-flash"
-              className="flash-in inline-flex items-center gap-1.5 rounded-full bg-[var(--app-accent)] px-3 py-1.5 text-xs font-bold text-[var(--app-accent-ink)] shadow-lg">
-              <Check className="size-3.5" strokeWidth={3} aria-hidden />
-              {flash.text}
-            </div>
-          )}
-          {tip && !flash && (
-            <div role="status" data-testid="editor-hint" className="inline-flex items-center gap-[7px] whitespace-nowrap rounded-full border border-[#14b8a6]/50 bg-[#14b8a6]/15 py-1.5 pl-[9px] pr-3 text-xs font-medium text-[#ccfbf1] shadow-lg backdrop-blur-md">
-              <Pencil className="size-[13px] shrink-0 text-[#14b8a6]" aria-hidden />
-              {tip}
-            </div>
-          )}
+        <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col gap-2">
+          <div className="flex items-start justify-between gap-2">
+            {holderId ? (
+              <div data-testid="ball-chip" className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-[rgba(11,16,21,0.88)] px-3 py-1 text-xs font-semibold text-[#e8edf2] shadow-lg backdrop-blur-md">
+                <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />
+                Ball: {labelOf(holderId)}
+              </div>
+            ) : (
+              <span />
+            )}
+            <FormationToggle hasOpp={!!play?.players.some((p) => p.team === 'opp')} />
+          </div>
+          <div className="flex flex-col items-center gap-2">
+            {flash && (
+              <div key={flash.id} role="status" data-testid="action-flash"
+                className="flash-in inline-flex items-center gap-1.5 rounded-full bg-[var(--app-accent)] px-3 py-1.5 text-xs font-bold text-[var(--app-accent-ink)] shadow-lg">
+                <Check className="size-3.5" strokeWidth={3} aria-hidden />
+                {flash.text}
+              </div>
+            )}
+            {tip && !flash && (
+              <div role="status" data-testid="editor-hint" className="inline-flex items-center gap-[7px] whitespace-nowrap rounded-full border border-[#14b8a6]/50 bg-[#14b8a6]/15 py-1.5 pl-[9px] pr-3 text-xs font-medium text-[#ccfbf1] shadow-lg backdrop-blur-md">
+                <Pencil className="size-[13px] shrink-0 text-[#14b8a6]" aria-hidden />
+                {tip}
+              </div>
+            )}
+          </div>
         </div>
         {selectedPlayerId && (
           <div
@@ -448,6 +448,17 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
         )}
         </div>
       )}
+      {mode !== 'preview' && step && (
+        <StepTextPanel
+          key={step.id}
+          badge={step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex}
+          title={step.title}
+          stepLabel={`Step ${currentStepIndex + 1} of ${play?.steps.length ?? 1}`}
+          ours={step.narrativeOurs}
+          opp={step.narrativeOpp}
+          body={runsOpen && step.moves.length > 0 ? <RunsList moves={step.moves} labelOf={labelOf} onToggle={(id) => toggleMoveHidden(id, currentStepIndex)} /> : undefined}
+        />
+      )}
       {mode !== 'preview' && (
         <>
           <div className="shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2" data-testid="step-bar">
@@ -473,6 +484,14 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
               </button>
             </div>
           </div>
+          {step && (
+            <RunsBar
+              moves={step.moves}
+              open={runsOpen}
+              onOpenChange={setRunsOpen}
+              onSetAll={(hidden) => setStepMovesHidden(currentStepIndex, hidden)}
+            />
+          )}
         </>
       )}
     </div>

@@ -22,7 +22,9 @@ import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
 import { neighbourStep } from '@/lib/engine/ballHolder'
 import { PitchMarkings } from './PitchMarkings'
 import { PitchSurface } from './PitchSurface'
-import { StepNote } from './StepNote'
+import { StepTextPanel } from './StepTextPanel'
+import { FormationGhosts, FormationToggle } from './Formation'
+import { BAR_HEIGHT } from './RunsPanel'
 
 interface AnimatedPitchProps {
   play: Play
@@ -102,6 +104,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
       </defs>
       <PitchSurface />
       <PitchMarkings />
+      <FormationGhosts players={play.players} />
 
       {frame && timeline && step && (
         <>
@@ -299,9 +302,10 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
       aria-label="Playback controls"
       className={
         fill
-          ? 'absolute inset-x-3 bottom-3 rounded-2xl border border-white/10 bg-[rgba(11,16,21,0.92)] p-2 shadow-2xl backdrop-blur-md'
+          ? 'flex shrink-0 flex-col justify-center gap-1 border-t border-[var(--app-line)] bg-[var(--bg-toolbar)] px-3'
           : 'rounded-lg bg-[var(--app-card)] p-3'
       }
+      style={fill ? { height: BAR_HEIGHT } : undefined}
     >
       <input
         type="range"
@@ -313,14 +317,16 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
         value={Math.round(progress * 1000)}
         onChange={(e) => engine.seek(Number(e.target.value) / 1000)}
       />
-      <div className="mt-0.5 flex items-center justify-between text-xs text-[var(--app-muted)]">
-        <span data-testid="anim-step-indicator" className="shrink-0 whitespace-nowrap tabular-nums">
-          Step {stepIndex + 1} of {total}
-        </span>
-        <span className="min-w-0 truncate pl-3">{step?.title}</span>
-      </div>
+      {!fill && (
+        <div className="mt-0.5 flex items-center justify-between text-xs text-[var(--app-muted)]">
+          <span data-testid="anim-step-indicator" className="shrink-0 whitespace-nowrap tabular-nums">
+            Step {stepIndex + 1} of {total}
+          </span>
+          <span className="min-w-0 truncate pl-3">{step?.title}</span>
+        </div>
+      )}
 
-      <div className="mt-2 grid grid-cols-5 gap-1">
+      <div className={`grid grid-cols-5 gap-1 ${fill ? '' : 'mt-2'}`}>
         <button type="button" data-testid="reset" aria-label="Restart" onClick={engine.reset}
           className={`${ctrl} text-[#cbd5e1] hover:bg-white/5 active:bg-white/15`}>
           <RotateCcw className="size-5" aria-hidden />
@@ -383,13 +389,23 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
       <div className="flex min-h-0 w-full flex-1 flex-col" data-testid="animated-pitch">
         <div className="relative min-h-0 flex-1 bg-[var(--pitch)]">
           {pitch}
-          <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col items-center gap-2">
-            {step && <StepNote key={step.id} badge={step.isAltBranch ? (step.altLabel ?? stepIndex) : stepIndex} title={step.title} detail={step.narrativeOurs.join(' ')} />}
-            {ballChip}
+          <div className="pointer-events-none absolute inset-x-3 top-3 flex items-start justify-between gap-2">
+            {ballChip || <span />}
+            <FormationToggle hasOpp={play.players.some((p) => p.team === 'opp')} />
           </div>
-          {controls}
         </div>
+        {step && (
+          <StepTextPanel
+            key={step.id}
+            badge={step.isAltBranch ? (step.altLabel ?? stepIndex) : stepIndex}
+            title={step.title}
+            stepLabel={<span data-testid="anim-step-indicator" className="tabular-nums">Step {stepIndex + 1} of {total}</span>}
+            ours={step.narrativeOurs}
+            opp={step.narrativeOpp}
+          />
+        )}
         {stepBar}
+        {controls}
       </div>
     )
   }

@@ -41,7 +41,9 @@ describe('QA 0 — defensive shape and theory', () => {
     const tl = getTimeline(play, 4)
     // the carrier is oRCB / oGK / oLCB, 3 to 23 m from their own goal: a defending shape would sit at y ~ 97-103
     const ys = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((t) => backLineY(tl, t))
-    expect(Math.max(...ys)).toBeLessThanOrEqual(ys[0] + 2) // never drops deeper than where it started
+    // (a few metres of momentum from the end of step 4, where the block was still dropping to the ball at ST)
+    expect(Math.max(...ys)).toBeLessThanOrEqual(ys[0] + 4)
+    expect(ys[0] - ys[8]).toBeGreaterThan(20) // ...then it climbs a long way
     expect(ys[8]).toBeLessThan(70) // and steps up to the (mid) maximum line, y = 105 - 42 = 63
   })
 
@@ -298,7 +300,7 @@ describe('QA 2 — theoretical correctness of the positions', () => {
   it('ball far to the left: the right side of the block narrows a long way in', () => {
     const w = world({ x: 8, y: 60 }, { owner: 'ours' })
     const t = computeAiTargets(w, 'opp', emptyStep, ON)
-    for (const id of ['oRB', 'oRW']) {
+    for (const id of ['oLB', 'oLW']) { // the far side from a ball on the left (OPP face down: their left is screen right)
       expect(homeOf(w, id)[0] - t[id].x).toBeGreaterThan(15)
     }
     // ...and the whole block shifts towards the ball
@@ -322,19 +324,19 @@ describe('QA 3 — authored rules mixed with the AI', () => {
   })
 
   it('authored press on LW (step 2): the AI does not send a second player at the ball', () => {
-    // oLB is the nearest free defender to the carrier; with oLCB already pressing LW he must not also press
+    // oRCB is the nearest free defender to the carrier; with oRB already pressing LW he must not also press
     const w = world({ x: 12, y: 65 }, { owner: 'ours', focus: 'LW', t: 3 })
     for (const p of w.players) {
-      if (p.id === 'oLCB') Object.assign(p, { x: 14, y: 66, duty: { type: 'press', att: 'LW' } })
-      if (p.id === 'oLB') Object.assign(p, { x: 14, y: 72 })
+      if (p.id === 'oRB') Object.assign(p, { x: 14, y: 66, duty: { type: 'press', att: 'LW' } })
+      if (p.id === 'oRCB') Object.assign(p, { x: 14, y: 72 })
       if (p.id === 'LW') Object.assign(p, { x: 12, y: 65 })
     }
     const t = computeAiTargets(w, 'opp', play.steps[1], ON)
-    expect(t.oLCB).toBeUndefined() // authored and active
+    expect(t.oRB).toBeUndefined() // authored and active
     expect(Object.values(t).filter((v) => v.role === 'presser')).toHaveLength(0) // nobody doubles up
     expect(Object.values(t).filter((v) => v.role === 'cover')).toHaveLength(1) // but someone covers the presser
     // without the authored job the nearest free defender would have pressed
-    for (const p of w.players) if (p.id === 'oLCB') p.duty = null
+    for (const p of w.players) if (p.id === 'oRB') p.duty = null
     const free = computeAiTargets(w, 'opp', emptyStep, ON)
     expect(Object.values(free).filter((v) => v.role === 'presser')).toHaveLength(1)
   })
@@ -343,12 +345,13 @@ describe('QA 3 — authored rules mixed with the AI', () => {
     const tl = getTimeline(play, 1)
     const f = sampleTimeline(tl, 4.9)
     const dist = (id: string) => Math.hypot(f.players[id].x - f.players.LW.x, f.players[id].y - f.players.LW.y)
-    const opp = Object.keys(f.players).filter((id) => id.startsWith('o') && id !== 'oGK').sort((a, b) => dist(a) - dist(b))
-    expect(opp[0]).toBe('oLCB') // the authored presser is on him (he arrives ~5.4 s: 20 m from a standing start at VMAX)
-    expect(dist('oLCB')).toBeLessThan(8)
+    // the back line (the winger oRW on that flank is a midfielder and not part of the press)
+    const opp = ['oLB', 'oLCB', 'oRCB', 'oRB'].sort((a, b) => dist(a) - dist(b))
+    expect(opp[0]).toBe('oRB') // the authored presser is on him (he arrives ~5.4 s: 20 m from a standing start at VMAX)
+    expect(dist('oRB')).toBeLessThan(11)
     expect(dist(opp[1])).toBeGreaterThan(9) // nobody doubles up
     // and he is closing steadily
-    expect(dist('oLCB')).toBeLessThan(Math.hypot(sampleTimeline(tl, 3.5).players.oLCB.x - 12, sampleTimeline(tl, 3.5).players.oLCB.y - 65) - 5)
+    expect(dist('oRB')).toBeLessThan(Math.hypot(sampleTimeline(tl, 3.5).players.oRB.x - 12, sampleTimeline(tl, 3.5).players.oRB.y - 65) - 5)
   })
 
   it('an attacker already pressed / marked by an authored rule is not also lane-screened', () => {
@@ -411,5 +414,76 @@ describe('QA 3 — authored rules mixed with the AI', () => {
     expect(Object.entries(computeAiTargets(w, 'opp', emptyStep, ON)).find(([, v]) => v.role === 'presser')![0]).toBe(incumbent)
     place(rival, Math.max(0.5, d0 - 4))
     expect(Object.entries(computeAiTargets(w, 'opp', emptyStep, ON)).find(([, v]) => v.role === 'presser')![0]).toBe(rival.id)
+  })
+})
+
+describe('OPP orientation: the mirror lives in the data, the engine uses x as-is and defends the right way up', () => {
+  const x = (p: Play, id: string) => p.players.find((q) => q.id === id)!.x
+
+  it('OPP face down the pitch: their right-hand players are on the screen-LEFT of their left-hand players (all seeded plays + the 4-4-2 builder)', async () => {
+    const { createDefaultPlay } = await import('@/lib/engine/defaultPlay')
+    const { toPlayInsert: pattern } = await import('@/lib/seed/rightSideBuildUp')
+    const test = seeded()
+    // Defensive AI test: every OPP x is 68 - (the x it had before the fix), so each right-hand player is left of his left-hand pair
+    const before: Record<string, number> = { oLB: 14, oRB: 60, oLCB: 28, oRCB: 48, oLW: 14, oRW: 60, oCML: 22, oCMR: 52 }
+    for (const [id, old] of Object.entries(before)) expect(x(test, id)).toBe(68 - old)
+    for (const [r, l] of [['oRB', 'oLB'], ['oRCB', 'oLCB'], ['oRW', 'oLW'], ['oCMR', 'oCML']]) expect(x(test, r)).toBeLessThan(x(test, l))
+    for (const id of ['oGK', 'oCAM', 'oST']) expect(x(test, id)).toBe(34) // symmetric
+    // the pattern-of-play data was authored mirrored already (oRB at x = 21 is on the screen left)
+    const pat = { ...pattern(), id: 'p', createdAt: '', updatedAt: '' } as Play
+    expect(x(pat, 'oRB')).toBeLessThan(x(pat, 'oLB'))
+    expect(x(pat, 'oRM')).toBeLessThan(x(pat, 'oLM'))
+    // the 4-4-2 builder mirrors OPP (x -> 68 - x): p-RB is on the screen left
+    const d = createDefaultPlay()
+    expect(x(d, 'p-RB')).toBeLessThan(x(d, 'p-LB'))
+    expect(x(d, 'p-RB') + x(d, 'p-LB')).toBe(68)
+  })
+
+  it('ST starts inside the OPP penalty area, the most advanced player on the pitch', () => {
+    const p = seeded()
+    const st = p.players.find((q) => q.id === 'ST')!
+    expect(st).toMatchObject({ x: 34, y: 88 })
+    const mostAdvancedOurs = Math.max(...p.players.filter((q) => q.team === 'ours').map((q) => q.y))
+    expect(st.y).toBe(mostAdvancedOurs)
+  })
+
+  it('a press by OPP stands goal-side of the attacker: HIGHER y (towards their goal at y = 105)', () => {
+    const roster: Play['players'] = [
+      { id: 'a', team: 'ours', label: 'A', x: 30, y: 40 },
+      { id: 'd', team: 'opp', label: 'D', x: 30, y: 60 },
+      { id: 'gk', team: 'opp', label: 'oGK', x: 34, y: 100 },
+    ]
+    const tl = getTimeline(custom(roster, [{ defenderRules: { d: [pr('a', 0, 1.5)] } }]), 0)
+    expect(tl.end.d.y).toBeCloseTo(41.5, 0) // att.y + gap
+    expect(tl.end.d.y).toBeGreaterThan(40)
+  })
+
+  it('...and a press by OURS stands goal-side of THEIR attacker: LOWER y (towards their goal at y = 0)', () => {
+    const roster: Play['players'] = [
+      { id: 'a', team: 'opp', label: 'oA', x: 30, y: 60 },
+      { id: 'd', team: 'ours', label: 'D', x: 30, y: 40 },
+      { id: 'gk', team: 'ours', label: 'GK', x: 34, y: 5 },
+    ]
+    const tl = getTimeline(custom(roster, [{ defenderRules: { d: [pr('a', 0, 1.5)] } }]), 0)
+    expect(tl.end.d.y).toBeCloseTo(58.5, 0) // att.y - gap
+    expect(tl.end.d.y).toBeLessThan(60)
+  })
+
+  it('the AI presser stands goal-side of the ball: ball.y + 1.2 for OPP, ball.y - 1.2 for OURS', () => {
+    const o = computeAiTargets(world({ x: 34, y: 60 }, { owner: 'ours', focus: 'CAM' }), 'opp', emptyStep, ON)
+    const oPresser = Object.values(o).find((v) => v.role === 'presser')!
+    expect(oPresser.y).toBeCloseTo(61.2, 6)
+    const u = computeAiTargets(world({ x: 34, y: 60 }, { owner: 'opp', focus: 'oCAM' }), 'ours', emptyStep, ON)
+    const uPresser = Object.values(u).find((v) => v.role === 'presser')!
+    expect(uPresser.y).toBeCloseTo(58.8, 6)
+  })
+
+  it('positions are used as authored: frame 0 of a step holds the data coordinates (no hidden mirroring)', () => {
+    const p = seeded()
+    const f = sampleTimeline(getTimeline(p, 0), 0)
+    for (const q of p.players) {
+      if (q.id === 'oGK') continue
+      expect(f.players[q.id].x).toBeCloseTo(q.x, 1)
+    }
   })
 })

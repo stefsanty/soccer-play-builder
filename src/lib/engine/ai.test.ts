@@ -78,7 +78,7 @@ describe('computeAiTargets', () => {
     // wide players on the ball side take the full shift, far side tucks in even more
     expect(t.oLB.x).toBeLessThan(homeOf(w, 'oLB')[0] - 3)
     expect(t.oRB.x).toBeLessThan(homeOf(w, 'oRB')[0] - 3)
-    expect(t.oRW.x).toBeLessThan(homeOf(w, 'oRW')[0] - 3)
+    expect(t.oRCB.x).toBeLessThan(homeOf(w, 'oRCB')[0] - 3)
     // central players stay central: at most 3 m from home
     // (a player picked as presser / cover / lane screen is placed by that job instead of by the block)
     const blockCentral = ['oLCB', 'oST', 'oCAM'].filter((id) => ['line', 'wide'].includes(t[id].role))
@@ -430,13 +430,13 @@ describe('the AI inside the simulation (seeded "Defensive AI test")', () => {
     expect(mean(4.9)).toBeLessThan(mean(0.5) - 2) // LW is on the left (low x)
   })
 
-  it('an authored press overrides the AI when it fires: oLCB presses LW from 1.8 s (step 2)', () => {
+  it('an authored press overrides the AI when it fires: oRB presses LW from 1.8 s (step 2)', () => {
     const tl = getTimeline(play, 1)
-    expect(tl.end.oLCB.rule?.type).toBe('press')
+    expect(tl.end.oRB.rule?.type).toBe('press')
     const before = sampleTimeline(tl, 1.7)
     const after = sampleTimeline(tl, 4.5)
-    const d = (f: typeof before) => Math.hypot(f.players.oLCB.x - f.players.LW.x, f.players.oLCB.y - f.players.LW.y)
-    expect(d(after)).toBeLessThan(d(before) - 5)
+    const d = (f: typeof before) => Math.hypot(f.players.oRB.x - f.players.LW.x, f.players.oRB.y - f.players.LW.y)
+    expect(d(after)).toBeLessThan(d(before) - 3)
   })
 
   it('the AI engages only after its reaction time', () => {

@@ -436,12 +436,14 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
       p.y += p.vy * H
     }
 
-    // 3. separation between free players (they never stack on one spot)
+    // 3. separation between free players of the SAME team (teammates never stack on one spot; a presser may
+    //    close right down on his opponent, whichever team is defending)
     const free = ids.filter((id) => !moved.has(id) && (st[id].team === 'opp' || st[id].rule))
     for (let i = 0; i < free.length; i++) {
       for (let j = i + 1; j < free.length; j++) {
         const a = st[free[i]]
         const b = st[free[j]]
+        if (a.team !== b.team) continue
         const dx = b.x - a.x
         const dy = b.y - a.y
         const d = Math.hypot(dx, dy)

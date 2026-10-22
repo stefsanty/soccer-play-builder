@@ -74,11 +74,16 @@ test.describe('pitch editor', () => {
     await expect(page.getByTestId('step-chip-0')).toHaveAttribute('aria-current', 'step')
   })
 
-  test('step note pill expands on tap', async ({ page }) => {
-    const note = page.getByTestId('step-note')
-    await expect(note).toHaveAttribute('aria-expanded', 'false')
-    await note.click()
-    await expect(note).toHaveAttribute('aria-expanded', 'true')
+  test('the step title and text sit in a panel below the pitch (no card over the pitch)', async ({ page }) => {
+    await expect(page.getByTestId('step-note')).toHaveCount(0)
+    const panel = page.getByTestId('step-text-panel')
+    await expect(panel).toBeVisible()
+    await expect(page.getByTestId('step-title')).toHaveText('Step 1')
+    const pitch = (await page.getByTestId('pitch-svg').boundingBox())!
+    const box = (await panel.boundingBox())!
+    expect(box.y).toBeGreaterThanOrEqual(pitch.y + pitch.height - 1) // below the pitch
+    const strip = (await page.getByTestId('step-bar').boundingBox())!
+    expect(strip.y).toBeGreaterThanOrEqual(box.y + box.height - 1) // the step tabs are below the panel
   })
 
   test('player drag changes position', async ({ page }) => {

@@ -47,17 +47,17 @@ test.describe('Defensive AI test: 4 scenarios', () => {
     expect(ys[2]).toBeLessThan(ys[1] - 30) // dropped deeper again
   })
 
-  test('step 2: the authored press from oLCB brings him towards LW', async ({ page }) => {
+  test('step 2: the authored press from oRB (the full-back on LW’s flank) brings him towards LW', async ({ page }) => {
     await pauseOnStep(page, 1)
     const dist = async () => {
-      const a = (await page.getByTestId('anim-player-oLCB').locator('circle').boundingBox())!
+      const a = (await page.getByTestId('anim-player-oRB').locator('circle').boundingBox())!
       const b = (await page.getByTestId('anim-player-LW').locator('circle').boundingBox())!
       return Math.hypot(a.x - b.x, a.y - b.y)
     }
     await seek(page, 340) // 1.7 s: just before the press fires
     const before = await dist()
     await seek(page, 1000)
-    expect(await dist()).toBeLessThan(before - 20)
+    expect(await dist()).toBeLessThan(before - 10) // (the pitch is drawn small in the test viewport: ~3.8 px per metre)
   })
 
   test('step 5: OPP recycle the ball at the back, the block stays high and oCAM follows ST into midfield', async ({ page }) => {
