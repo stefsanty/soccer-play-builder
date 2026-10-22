@@ -417,6 +417,43 @@ export function computeAiTargets(
     }
   }
 
+  // ---- separation: keep AI-driven block players from clustering ----
+  // Runs before the offside line so the Y correction that follows re-pins the back line to one height;
+  // presser / cover / screen have specific tactical targets and are exempt.
+  {
+    const minSep = lerp(5, 8, P.width / 100)
+    const xLo = 3 + P.widthInward
+    const xHi = PITCH_W - 3 - P.widthInward
+    const sepExempt = (p: AiWorldPlayer): boolean => {
+      const r = role.get(p.id)
+      if (r === 'presser' || r === 'cover' || r === 'screen') return true
+      const d = p.duty?.type
+      return d === 'press' || d === 'mark' || d === 'follow'
+    }
+    const sepField = field.filter((p) => !sepExempt(p))
+    for (let sepPass = 0; sepPass < 4; sepPass++) {
+      let moved = false
+      for (let i = 0; i < sepField.length; i++) {
+        for (let j = i + 1; j < sepField.length; j++) {
+          const ti = target.get(sepField[i].id)!
+          const tj = target.get(sepField[j].id)!
+          const dx = tj[0] - ti[0]
+          const dy = tj[1] - ti[1]
+          const d = Math.hypot(dx, dy)
+          if (d >= minSep) continue
+          let nx: number, ny: number
+          if (d < 1e-6) { nx = 1; ny = 0 } // identical positions: push apart along X
+          else { nx = dx / d; ny = dy / d }
+          const push = (minSep - d) / 2
+          target.set(sepField[i].id, [clamp(ti[0] - nx * push, xLo, xHi), clamp(ti[1] - ny * push, 3, PITCH_H - 3)])
+          target.set(sepField[j].id, [clamp(tj[0] + nx * push, xLo, xHi), clamp(tj[1] + ny * push, 3, PITCH_H - 3)])
+          moved = true
+        }
+      }
+      if (!moved) break
+    }
+  }
+
   // ---- offside line: the back line holds one height (the presser is the exception) ----
   if (config.offsideLine !== false) {
     for (const p of field) {

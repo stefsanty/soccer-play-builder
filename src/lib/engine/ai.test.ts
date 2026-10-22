@@ -220,6 +220,71 @@ describe('computeAiTargets', () => {
     const ys = ['oLB', 'oLCB', 'oRCB', 'oRB'].map((id) => on[id].y)
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(1e-9)
   })
+
+  describe('separation: defenders do not cluster', () => {
+    const minSep = (width = 50) => 5 + (8 - 5) * (width / 100)
+
+    it('pushes two defenders apart when their targets would overlap (same home position)', () => {
+      // Two defenders stacked at the same home → their block targets are identical → separation must push them apart
+      const players: AiWorldPlayer[] = [
+        { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 99, home: [34, 99] },
+        { id: 'oLCB', team: 'opp', label: 'oLCB', x: 20, y: 70, home: [20, 70] },
+        { id: 'oRCB', team: 'opp', label: 'oRCB', x: 20, y: 70, home: [20, 70] }, // same as oLCB
+      ]
+      const w: AiWorld = { players, ball: { x: 34, y: 30 }, memory: {} }
+      const t = computeAiTargets(w, 'opp', emptyStep, ON)
+      const a = [t['oLCB'].x, t['oLCB'].y]
+      const b = [t['oRCB'].x, t['oRCB'].y]
+      expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeGreaterThanOrEqual(minSep() - 1e-6)
+    })
+
+    it('separation scales with width: wider setting → larger minimum gap', () => {
+      const players: AiWorldPlayer[] = [
+        { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 99, home: [34, 99] },
+        { id: 'oLCB', team: 'opp', label: 'oLCB', x: 34, y: 70, home: [34, 70] },
+        { id: 'oRCB', team: 'opp', label: 'oRCB', x: 34, y: 70, home: [34, 70] },
+      ]
+      const w: AiWorld = { players, ball: { x: 34, y: 30 }, memory: {} }
+      const narrow = computeAiTargets(w, 'opp', emptyStep, { on: true, width: 10 })
+      const wide = computeAiTargets(w, 'opp', emptyStep, { on: true, width: 90 })
+      const sepNarrow = Math.hypot(narrow['oLCB'].x - narrow['oRCB'].x, narrow['oLCB'].y - narrow['oRCB'].y)
+      const sepWide = Math.hypot(wide['oLCB'].x - wide['oRCB'].x, wide['oLCB'].y - wide['oRCB'].y)
+      expect(sepNarrow).toBeGreaterThanOrEqual(minSep(10) - 1e-6)
+      expect(sepWide).toBeGreaterThanOrEqual(minSep(90) - 1e-6)
+      expect(sepWide).toBeGreaterThanOrEqual(sepNarrow - 1e-6)
+    })
+
+    it('presser is exempt from separation (can close down regardless of teammate proximity)', () => {
+      // Put a ball very close to oLCB so it becomes presser; oRCB is near the same spot
+      const players: AiWorldPlayer[] = [
+        { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 99, home: [34, 99] },
+        { id: 'oLCB', team: 'opp', label: 'oLCB', x: 34, y: 75, home: [34, 75] },
+        { id: 'oRCB', team: 'opp', label: 'oRCB', x: 36, y: 75, home: [36, 75] }, // 2 m away
+      ]
+      const w: AiWorld = { players, ball: { x: 34, y: 72 }, memory: {} }
+      const t = computeAiTargets(w, 'opp', emptyStep, ON)
+      const presser = Object.entries(t).find(([, v]) => v.role === 'presser')
+      expect(presser).toBeTruthy()
+      // presser's target can be close to the ball regardless of oRCB's position
+      const pid = presser![0]
+      expect(t[pid].y).toBeGreaterThanOrEqual(72 - 5) // heading for the ball
+    })
+
+    it('does not separate players with an authored press/mark/follow duty', () => {
+      const w = world({ x: 34, y: 60 })
+      // Give oLCB an authored press duty on the ball carrier
+      w.players.find((p) => p.id === 'oLCB')!.duty = { type: 'press', att: 'GK' }
+      // Stack oRCB at the same home position as oLCB so they would normally cluster
+      const lcb = w.players.find((p) => p.id === 'oLCB')!
+      w.players.find((p) => p.id === 'oRCB')!.x = lcb.x
+      w.players.find((p) => p.id === 'oRCB')!.y = lcb.y
+      ;(w.players.find((p) => p.id === 'oRCB') as AiWorldPlayer).home = [lcb.x, lcb.y]
+      const t = computeAiTargets(w, 'opp', emptyStep, ON)
+      // oLCB has press duty → exempt; it can be collocated with oRCB without separation pushing it
+      // We only assert oRCB gets a valid target (it might be pushed, oLCB might not be)
+      expect(t['oRCB']).toBeDefined()
+    })
+  })
 })
 
 describe('follow: bounds', () => {

@@ -193,8 +193,9 @@ function ruleTarget(rule: DefenderRule, self: PlayerState, pos: (id: string) => 
 const ruleAttacker = (r: DefenderRule | null): string | null =>
   !r ? null : r.type === 'mark' ? r.attacker : r.type === 'press' || r.type === 'follow' ? r.att : null
 
-/** Simulate `play.steps[stepIndex]` from `start`. */
-export function simulateStep(play: Play, stepIndex: number, start: SimState, holderStartIn: string | null): StepTimeline {
+/** Simulate `play.steps[stepIndex]` from `start`. `startBall` pins the ball position at frame 0 so it
+ * inherits exactly from where the previous step ended rather than being recomputed from the holder's facing. */
+export function simulateStep(play: Play, stepIndex: number, start: SimState, holderStartIn: string | null, startBall?: Pt): StepTimeline {
   const step: PlayStep = play.steps[stepIndex]
   const duration = step.duration > 0 ? step.duration : 0
   const n = Math.round(duration / H)
@@ -483,6 +484,8 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
     // (ball needs this frame's positions, so it is computed against `frame` before it is pushed)
     frames.push(frame)
     frame.ball = ballAt(t)
+    // step N (N>0): pin the ball at frame 0 to the exact position the previous step ended on
+    if (k === 0 && startBall) frame.ball = { ...frame.ball, x: startBall[0], y: startBall[1] }
     // defenders only watch a ball that exists (a play without passes has none)
     lastBall = frame.ball.holder || frame.ball.flying ? frame.ball : null
     for (const id of ids) {
@@ -509,8 +512,11 @@ export function getTimeline(play: Play, stepIndex: number): StepTimeline {
   const hit = perPlay.get(i)
   if (hit) return hit
   const base = baseStepIndex(play, i)
-  const start = base < 0 ? initialState(play) : getTimeline(play, base).end
-  const tl = simulateStep(play, i, start, ballHolderBefore(play, i))
+  const baseTl = base < 0 ? null : getTimeline(play, base)
+  const start = baseTl ? baseTl.end : initialState(play)
+  const lastBallFrame = baseTl?.frames.at(-1)?.ball
+  const startBall: Pt | undefined = lastBallFrame ? [lastBallFrame.x, lastBallFrame.y] : undefined
+  const tl = simulateStep(play, i, start, ballHolderBefore(play, i), startBall)
   perPlay.set(i, tl)
   return tl
 }
