@@ -67,6 +67,8 @@ export interface AiTarget {
   y: number
   gain: number
   role: Exclude<AiRole, 'auto'>
+  /** For a `screen`: the opponent whose pass this player is cutting. */
+  lane?: string
 }
 
 /** Reference rows for the old low / mid / high presets (aggressiveness 20 / 50 / 80 interpolate between them). */
@@ -102,6 +104,14 @@ export const MIN_LANE = 8
 const PRESS_SQUEEZE = 0.18
 /** How far sideways the cover may come off his own slot to get behind the press. */
 const COVER_REACH = 8
+/** How far a cutter will step off his own slot to get onto a lane. Past this he holds his position instead. */
+export const LANE_REACH = 18
+/** Neighbours may be this much further apart than their formation spacing before cohesion starts pulling. */
+export const NEIGHBOUR_SLACK = 5
+/** Share of the overstretch to a neighbour that cohesion takes back per pass. */
+const COHESION = 0.5
+/** How many formation neighbours each player is tied to. */
+const NEIGHBOURS = 2
 
 const PITCH_W = 68
 const PITCH_H = 105
@@ -120,16 +130,26 @@ const tri = (v: number, [p0, p1, p2]: [number, number, number], [y0, y1, y2]: [n
   v <= p1 ? lerp(y0, y1, clamp((v - p0) / (p1 - p0), 0, 1)) : lerp(y1, y2, clamp((v - p1) / (p2 - p1), 0, 1))
 
 /**
+ * The point of the finite segment `a`-`b` closest to `p`, with `minFromA` metres of it next to `a` ruled out
+ * (a lane cutter uses that to stay off the carrier's feet).
+ */
+export function closestPointOnSegment(p: XY, a: XY, b: XY, minFromA = 0): XY {
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const lenSq = dx * dx + dy * dy
+  if (lenSq < 1e-12) return [a[0], a[1]]
+  const len = Math.sqrt(lenSq)
+  const lo = Math.min(minFromA / len, 1)
+  const t = clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq, lo, 1)
+  return [a[0] + t * dx, a[1] + t * dy]
+}
+
+/**
  * Distance from `p` to the finite segment `a`-`b`. Beyond either end it is the distance to that end, so a
  * defender standing past the receiver does not count as being on the pass.
  */
 export function distPointToSegment(p: XY, a: XY, b: XY): number {
-  const dx = b[0] - a[0]
-  const dy = b[1] - a[1]
-  const lenSq = dx * dx + dy * dy
-  if (lenSq < 1e-12) return dist(p, a)
-  const t = clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq, 0, 1)
-  return dist(p, [a[0] + t * dx, a[1] + t * dy])
+  return dist(p, closestPointOnSegment(p, a, b))
 }
 
 /**
@@ -299,6 +319,20 @@ export function computeAiTargets(
   const defHomeDepths = outfield.filter((p) => lineOf.get(p.id) === defIdx).map((p) => homeDepth.get(p.id)!)
   const defHome = defHomeDepths.length ? defHomeDepths.reduce((a, b) => a + b, 0) / defHomeDepths.length : 25
 
+  // who each player keeps contact with: his closest neighbours in the FORMATION, and how far apart the
+  // formation puts them. Taken from the shape, so it does not drift as players are pulled about in play.
+  const neighbours = new Map<string, { id: string; d: number }[]>()
+  for (const p of outfield) {
+    neighbours.set(
+      p.id,
+      outfield
+        .filter((q) => q.id !== p.id)
+        .map((q) => ({ id: q.id, d: dist(p.home, q.home) }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, NEIGHBOURS),
+    )
+  }
+
   const lineD = blendedLineDepth(dBall, P, inPossession)
   const shiftX = blockShift(ball.x, P)
 
@@ -327,6 +361,7 @@ export function computeAiTargets(
   for (const p of field) role.set(p.id, lineOf.get(p.id) === defIdx ? 'line' : 'wide')
   const target = new Map<string, XY>(block)
   const gain = new Map<string, number>(field.map((p) => [p.id, GAIN.block] as const))
+  const lane = new Map<string, string>()
 
   if (!inPossession) {
     // ---- is someone already engaging the ball through an authored job (press / mark / follow the carrier)? ----
@@ -409,14 +444,20 @@ export function computeAiTargets(
         const bx = block.get(p.id)![0]
         for (const a of foes) if (dist([bx, lineY], [a.x, a.y]) <= HANDOFF_R) onTheLine.add(a.id)
       }
-      /** May `m` be the one to cut the pass to `a`? Pure geometry: his band of the pitch, his flank, a real
-       *  pass, and a lane nobody is covering already. */
+      /** The spot ON the lane to `a` that `m` would take: the nearest to his own slot, never closer to the
+       *  carrier than MIN_LANE / 2, which is the presser's business and not his. */
+      const spotOnLane = (m: AiWorldPlayer, a: AiWorldPlayer): XY =>
+        closestPointOnSegment(block.get(m.id)!, [ball.x, ball.y], [a.x, a.y], MIN_LANE / 2)
+
+      /** May `m` be the one to cut the pass to `a`? Pure geometry: his band of the pitch, a real pass, his own
+       *  flank, a lane nobody covers already, and close enough that covering it does not strand him. */
       const canCut = (m: AiWorldPlayer, a: AiWorldPlayer): boolean => {
         const mHome = depthOf(m.home[1])
         const aDepth = depthOf(a.y)
         if (aDepth <= Math.min(dBall, mHome) || aDepth >= Math.max(dBall, mHome)) return false // between ball and slot
         if (dist([a.x, a.y], [ball.x, ball.y]) < MIN_LANE) return false // a real pass, not the carrier's feet
         if (Math.abs(m.home[0] - CENTRE_X) >= 10 && Math.abs(a.x - m.home[0]) > WIDE_LANE_REACH) return false // holds his flank
+        if (dist(block.get(m.id)!, spotOnLane(m, a)) > LANE_REACH) return false // too far to cover without stranding him
         const blockers = field.filter((d) => d.id !== m.id && !pulled.has(d.id)).map((d): XY => [d.x, d.y])
         return passingLaneOpen([ball.x, ball.y], [a.x, a.y], blockers)
       }
@@ -432,9 +473,14 @@ export function computeAiTargets(
           .sort((a, b) => dist(m.home, [a.x, a.y]) - dist(m.home, [b.x, b.y]))[0]
         if (!open) continue
         taken.add(open.id)
-        target.set(m.id, [clamp((ball.x + open.x) / 2, 2, PITCH_W - 2), clamp((ball.y + open.y) / 2 + goalDir * 1, 0, PITCH_H)])
+        // He steps onto the lane properly — a man shading it from 6 m away blocks nothing. What keeps him in
+        // the shape is that canCut refused any lane further than LANE_REACH from his slot, plus the cohesion
+        // pass below pulling him back if covering it has stretched him off his neighbours.
+        const onLane = spotOnLane(m, open)
+        target.set(m.id, [clamp(onLane[0], 2, PITCH_W - 2), clamp(onLane[1] + goalDir * 1, 0, PITCH_H)])
         gain.set(m.id, GAIN.screen)
         role.set(m.id, 'screen')
+        lane.set(m.id, open.id)
       }
     }
 
@@ -450,6 +496,57 @@ export function computeAiTargets(
     }
   } else {
     S.memory.presser = { ...S.memory.presser, [team]: undefined }
+  }
+
+  // ---- cohesion: a player holding shape stays in contact with his formation neighbours ----
+  // A weighted pull, not a lock: only the overstretch past the formation spacing (plus slack) is taken back,
+  // and only a share of it per pass, so covering a lane still moves a player — it just cannot strand him.
+  // The presser and his cover are exempt: winning the ball is worth leaving the shape for.
+  {
+    const held = (id: string) => {
+      const r = role.get(id)
+      return r === 'line' || r === 'wide' || r === 'screen'
+    }
+    // a neighbour the AI is not driving (an authored job, say) still anchors from where he actually stands
+    const anchorOf = (id: string): XY | null => {
+      const t = target.get(id)
+      if (t) return t
+      const q = own.find((p) => p.id === id)
+      return q ? [q.x, q.y] : null
+    }
+    for (let pass = 0; pass < 3; pass++) {
+      for (const p of field) {
+        if (!held(p.id)) continue
+        const t = target.get(p.id)!
+        let px = 0
+        let py = 0
+        let n = 0
+        for (const nb of neighbours.get(p.id) ?? []) {
+          const q = anchorOf(nb.id)
+          if (!q) continue
+          const d = dist(t, q)
+          const limit = nb.d + NEIGHBOUR_SLACK
+          if (d <= limit || d < 1e-9) continue
+          const excess = d - limit
+          px += ((q[0] - t[0]) / d) * excess
+          py += ((q[1] - t[1]) / d) * excess
+          n++
+        }
+        if (!n) continue
+        let x = clamp(t[0] + (px / n) * COHESION, 2, PITCH_W - 2)
+        // the block keeps central players central; cohesion pulls sideways, so it must not undo that
+        if (Math.abs(p.home[0] - CENTRE_X) < 10) x = clamp(x, p.home[0] - 3, p.home[0] + 3)
+        let next: XY = [x, clamp(t[1] + (py / n) * COHESION, 2, PITCH_H - 2)]
+        // A cutter slides ALONG his lane to keep contact, never off it: standing beside a pass blocks
+        // nothing, and cutting it is the job he was given.
+        const recv = foes.find((f) => f.id === lane.get(p.id))
+        if (recv) {
+          const on = closestPointOnSegment(next, [ball.x, ball.y], [recv.x, recv.y], MIN_LANE / 2)
+          next = [on[0], clamp(on[1] + goalDir * 1, 0, PITCH_H)]
+        }
+        target.set(p.id, next)
+      }
+    }
   }
 
   const minSep = lerp(5, 8, P.width / 100)
@@ -554,7 +651,8 @@ export function computeAiTargets(
 
   for (const p of field) {
     const t = target.get(p.id)!
-    out[p.id] = { x: t[0], y: t[1], gain: gain.get(p.id)!, role: role.get(p.id)! }
+    const cutting = lane.get(p.id)
+    out[p.id] = { x: t[0], y: t[1], gain: gain.get(p.id)!, role: role.get(p.id)!, ...(cutting && role.get(p.id) === 'screen' ? { lane: cutting } : {}) }
   }
 
   // ---- keeper: stays in the box, shades towards the ball ----

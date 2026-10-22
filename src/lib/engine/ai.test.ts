@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AiWorld, GAIN, INTENSITY, LANE_BLOCK_R, MIN_LANE, PRESETS, WIDE_LANE_REACH, blendedLineDepth, blockShift, computeAiTargets, distPointToSegment, lineDepth, passingLaneOpen, resolveAiParams, type AiWorldPlayer, type XY } from '@/lib/engine/ai'
+import { AiWorld, GAIN, INTENSITY, LANE_BLOCK_R, MIN_LANE, NEIGHBOUR_SLACK, PRESETS, WIDE_LANE_REACH, blendedLineDepth, blockShift, computeAiTargets, distPointToSegment, lineDepth, passingLaneOpen, resolveAiParams, type AiWorldPlayer, type XY } from '@/lib/engine/ai'
 import { EXIT_MARGIN, HANDOFF_COOLDOWN, clampIntoBounds, contains, handoffCost, newFollowTrack, pickHandoff, trackExit } from '@/lib/engine/follow'
 import { H, getTimeline, sampleTimeline } from '@/lib/engine/simulator'
 import { ai, fl, mk, pr, zn } from '@/lib/engine/rules'
@@ -57,8 +57,9 @@ describe('computeAiTargets', () => {
     for (const id of ['oLB', 'oLCB', 'oRCB', 'oRB']) {
       expect(t[id].y).toBeCloseTo(line, 6)
       expect(t[id].y).toBeGreaterThan(30) // goal-side of the ball (towards y = 105)
-      // shiftX ~ 0 (the default width only holds wide players 9 m in from the touchline: oRB 8 -> 9)
-      expect(Math.abs(t[id].x - homeOf(w, id)[0])).toBeLessThanOrEqual(1 + 1e-9)
+      // shiftX ~ 0 (the default width only holds wide players 9 m in from the touchline: oRB 8 -> 9, and
+      // cohesion may nudge a couple of metres sideways to keep contact with a neighbour)
+      expect(Math.abs(t[id].x - homeOf(w, id)[0])).toBeLessThanOrEqual(3)
     }
     expect(blockShift(34)).toBe(0)
     // and the same for the team defending y = 0: ball 30 m from their goal
@@ -197,8 +198,9 @@ describe('computeAiTargets', () => {
     const screeners = Object.entries(t).filter(([, v]) => v.role === 'screen')
     expect(screeners.length).toBeGreaterThanOrEqual(1)
     const [, tgt] = screeners[0]
-    expect(tgt.x).toBeCloseTo((34 + 34) / 2, 6)
-    expect(tgt.y).toBeCloseTo((20 + 50) / 2 + 1, 6) // midpoint, nudged 1 m goal-side
+    // he stands ON the pass, which is what closing a lane means — the spot of it nearest his own slot
+    expect(distPointToSegment([tgt.x, tgt.y], [34, 20], [34, 50])).toBeLessThanOrEqual(LANE_BLOCK_R)
+    expect(tgt.lane).toBe('CAM')
   })
 
   it('respects exclude and authored rules, and does nothing without a ball', () => {
@@ -396,10 +398,6 @@ describe('pressing: one presser, and the block keeps its shape behind him', () =
       // everyone else is holding the block or cutting a lane — no third man goes to the carrier
       const breaking = Object.values(t).filter((v) => !['line', 'wide', 'screen', 'gk'].includes(v.role))
       expect(breaking.map((v) => v.role).sort()).toEqual(['cover', 'presser'])
-      // and a lane cutter is never parked on the carrier's feet: he is on a pass worth cutting
-      for (const v of Object.values(t).filter((v) => v.role === 'screen')) {
-        expect(Math.hypot(v.x - ball.x, v.y - ball.y)).toBeGreaterThanOrEqual(MIN_LANE / 2 - 1e-9)
-      }
     }
   })
 
@@ -431,34 +429,32 @@ describe('pressing: one presser, and the block keeps its shape behind him', () =
 // between ball and own slot, the nearest zone, the player's own flank). These helpers re-derive the assignment
 // from the targets so a test can check that RULE on any shape, instead of pinning one worked example's pairing.
 
-/** The opponent a cutter was sent to screen, read back out of its target (which is the lane's midpoint). */
-function receiverOf(v: { x: number; y: number }, ball: { x: number; y: number }, goalDir: number, foes: AiWorldPlayer[]) {
-  const rx = 2 * v.x - ball.x
-  const ry = 2 * (v.y - goalDir) - ball.y
-  return foes.find((f) => Math.hypot(f.x - rx, f.y - ry) < 1e-6) ?? null
-}
-
 /** Check the lane-cutting rule itself against whatever shape `w` holds. */
 function auditLanes(w: AiWorld, team: 'ours' | 'opp', cfg: Parameters<typeof computeAiTargets>[3] = ON) {
   const t = computeAiTargets(w, team, emptyStep, cfg)
   const ball = w.ball!
-  const goalDir = team === 'opp' ? 1 : -1
   const foes = w.players.filter((p) => p.team !== team)
   const cut = Object.entries(t)
     .filter(([, v]) => v.role === 'screen')
     .map(([id, v]) => {
-      const recv = receiverOf(v, ball, goalDir, foes)
-      expect(recv, `cutter ${id} is not standing on a lane to any opponent`).not.toBeNull()
-      return { id, home: w.players.find((p) => p.id === id)!.home, recv: recv! }
+      const recv = foes.find((f) => f.id === v.lane)
+      expect(recv, `cutter ${id} reports no opponent to cut`).toBeTruthy()
+      return { id, home: w.players.find((p) => p.id === id)!.home, recv: recv!, at: v }
     })
 
   expect(new Set(cut.map((c) => c.recv.id)).size, 'two cutters on one opponent').toBe(cut.length)
   const gap = (h: XY, p: { x: number; y: number }) => Math.hypot(h[0] - p.x, h[1] - p.y)
   for (const c of cut) {
-    expect(c.id, 'a cutter is screening a pass too short to be a pass').toBeTruthy()
-    expect(gap([ball.x, ball.y], c.recv)).toBeGreaterThanOrEqual(MIN_LANE)
+    // the pass he is cutting is a real pass, not the carrier's own feet
+    expect(gap([ball.x, ball.y], c.recv), `${c.id} is on a pass too short to be a pass`).toBeGreaterThanOrEqual(MIN_LANE)
     // a player whose slot is off centre cuts inside his own flank rather than vacating it
     if (Math.abs(c.home[0] - 34) >= 10) expect(Math.abs(c.recv.x - c.home[0])).toBeLessThanOrEqual(WIDE_LANE_REACH)
+    // He is standing ON the pass he was given, not shading it from a distance where he blocks nothing.
+    // Cohesion can only slide him along it, so this holds exactly.
+    expect(
+      distPointToSegment([c.at.x, c.at.y], [ball.x, ball.y], [c.recv.x, c.recv.y]),
+      `${c.id} is not on the lane it was given`,
+    ).toBeLessThanOrEqual(LANE_BLOCK_R)
   }
   // The assignment is settled: no two cutters who COULD trade lanes would both rather do so. A trade the rule
   // forbids is not a defect, so the two stated limits — cut inside your own band, hold your own flank — are
@@ -535,6 +531,86 @@ describe('lane cutters: the rule, on the test play phase 1 (a press on the blue 
   })
 })
 
+describe('cohesion: a player holding shape stays with his formation neighbours', () => {
+  /** Each outfield player's two nearest neighbours in the formation, and the spacing the formation gives them. */
+  const neighboursOf = (w: AiWorld, team: 'ours' | 'opp') => {
+    const outfield = w.players.filter((p) => p.team === team && !/gk/i.test(p.label))
+    return new Map(
+      outfield.map((p) => [
+        p.id,
+        outfield
+          .filter((q) => q.id !== p.id)
+          .map((q) => ({ id: q.id, d: Math.hypot(p.home[0] - q.home[0], p.home[1] - q.home[1]) }))
+          .sort((a, b) => a.d - b.d)
+          .slice(0, 2),
+      ]),
+    )
+  }
+
+  // Cohesion is a weighted pull, not a lock: it takes back a share of the overstretch per pass, and the
+  // spacing passes that follow it (separation, then the offside line flattening the back line's y) can give a
+  // little of that back. So the guarantee is a bounded overshoot of the limit, not the limit exactly.
+  const RESIDUAL = 6
+
+  it('nobody holding shape is left stretched far past his formation spacing', () => {
+    let worst = 0
+    for (const by of [12, 30, 48, 66, 84]) {
+      for (const bx of [8, 24, 40, 56]) {
+        for (const aggressiveness of [50, 75, 100]) {
+          const w = world({ x: bx, y: by }, { owner: 'ours' })
+          const t = computeAiTargets(w, 'opp', emptyStep, { on: true, aggressiveness })
+          const nb = neighboursOf(w, 'opp')
+          for (const [id, v] of Object.entries(t)) {
+            if (!['line', 'wide', 'screen'].includes(v.role)) continue
+            for (const n of nb.get(id) ?? []) {
+              const q = t[n.id]
+              if (!q) continue
+              const over = Math.hypot(q.x - v.x, q.y - v.y) - (n.d + NEIGHBOUR_SLACK)
+              if (over > worst) worst = over
+              expect(over, `${id} stretched away from ${n.id}`).toBeLessThanOrEqual(RESIDUAL)
+            }
+          }
+        }
+      }
+    }
+    expect(worst).toBeGreaterThan(0) // the constraint is actually binding somewhere in this sweep
+  })
+
+  it('the presser is exempt — winning the ball is worth leaving the shape for', () => {
+    const w = world({ x: 34, y: 95 }, { owner: 'ours' })
+    const t = computeAiTargets(w, 'opp', emptyStep, { on: true, aggressiveness: 100 })
+    const presser = Object.entries(t).find(([, v]) => v.role === 'presser')!
+    expect(Math.hypot(presser[1].x - 34, presser[1].y - 95)).toBeLessThan(3) // he still goes to the ball
+  })
+})
+
+describe('lane cutters: a lane beyond reach is declined, not chased', () => {
+  /** One midfielder, one carrier, and one receiver placed `across` metres off the midfielder's slot. */
+  const scene = (recvX: number) => {
+    const players: AiWorldPlayer[] = [
+      { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 100, home: [34, 100] },
+      { id: 'oCB', team: 'opp', label: 'oCB', x: 34, y: 86, home: [34, 86] },
+      { id: 'oMID', team: 'opp', label: 'oMID', x: 34, y: 62, home: [34, 62] },
+      { id: 'C', team: 'ours', label: 'C', x: 34, y: 30, home: [34, 30] },
+      { id: 'R', team: 'ours', label: 'R', x: recvX, y: 50, home: [recvX, 50] },
+    ]
+    return computeAiTargets({ players, ball: { x: 34, y: 30 }, memory: {}, owner: 'ours', focus: 'C' }, 'opp', emptyStep, ON)
+  }
+
+  it('cuts a lane that runs close to his own slot', () => {
+    const t = scene(34) // straight in front of him
+    expect(t.oMID.role).toBe('screen')
+    expect(t.oMID.lane).toBe('R')
+  })
+
+  it('holds position when the only lane would drag him clear across the pitch', () => {
+    const t = scene(66) // the far touchline: covering this lane means abandoning the middle
+    expect(t.oMID.role).not.toBe('screen')
+    expect(t.oMID.lane).toBeUndefined()
+    expect(Math.abs(t.oMID.x - 34)).toBeLessThanOrEqual(3 + 1e-9) // still central, where his slot is
+  })
+})
+
 describe('lane cutters: the same rule on shapes and ball positions it was never tuned on', () => {
   /** A 3-4-3 OPP block — nothing like the seed's 4-3-3 — plus an attack to cut lanes against. */
   const threeFourThree = (ball: { x: number; y: number }, focus: string): AiWorld => {
@@ -598,17 +674,17 @@ describe('lane cutters: the back line taking over frees the cutter in front', ()
     return computeAiTargets(w, 'opp', emptyStep, { on: true, aggressiveness: 100, lineHeight: 100 })
   }
 
-  it('shadows the nearer attacker when the centre-back is away on the other side', () => {
+  it('cuts the lane to the nearer attacker when the centre-back is away on the other side', () => {
     const t = scene(10) // the CB's slot is 24 m across: it never reaches A
     expect(t.oMID.role).toBe('screen')
-    expect(t.oMID.y).toBeCloseTo((30 + 53) / 2 + 1, 6) // on the lane to A, the one nearest his zone
+    expect(t.oMID.lane).toBe('A') // the one nearest his own zone
   })
 
-  it('pushes higher onto the next lane once the line has stepped onto that attacker', () => {
+  it('is handed the next lane along once the line has stepped onto that attacker', () => {
     const t = scene(34) // the CB steps up onto A
     expect(t.oMID.role).toBe('screen')
-    expect(t.oMID.y).toBeCloseTo((30 + 40) / 2 + 1, 6) // handed A over, now cutting the lane to B
-    expect(t.oMID.y).toBeLessThan((30 + 53) / 2 + 1) // higher up the pitch (OPP: towards y = 0)
+    expect(t.oMID.lane).toBe('B') // A is the line's now, so he takes the lane further forward
+    expect(scene(10).oMID.lane).not.toBe(scene(34).oMID.lane) // the pickup is what changed it
   })
 })
 

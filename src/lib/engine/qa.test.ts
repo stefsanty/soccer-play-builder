@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import { toPlayInsert } from '@/lib/seed/defensiveAiTest'
 import { H, VMAX, getTimeline, sampleTimeline, type StepTimeline } from '@/lib/engine/simulator'
-import { blendedLineDepth, computeAiTargets, lineDepth, resolveAiParams, type AiWorld, type AiWorldPlayer, type Team } from '@/lib/engine/ai'
+import { LANE_BLOCK_R, blendedLineDepth, computeAiTargets, distPointToSegment, lineDepth, resolveAiParams, type AiWorld, type AiWorldPlayer, type Team } from '@/lib/engine/ai'
 import { fl, mk, pr, zn } from '@/lib/engine/rules'
 import type { Play, PlayStep } from '@/lib/types/play'
 
@@ -291,15 +291,16 @@ describe('QA 2 — theoretical correctness of the positions', () => {
     expect(screens).toBeGreaterThan(0)
   })
 
-  it('a screener stands between the ball and the open attacker, a metre goal-side of their midpoint', () => {
+  it('a screener stands on the pass between the ball and the open attacker', () => {
     const w = world({ x: 34, y: 20 }, { owner: 'ours' })
     w.players = w.players.filter((p) => p.team === 'opp' || p.id === 'GK' || p.id === 'CAM')
     Object.assign(w.players.find((p) => p.id === 'GK')!, { x: 34, y: 20 })
     Object.assign(w.players.find((p) => p.id === 'CAM')!, { x: 34, y: 50 })
     const t = computeAiTargets(w, 'opp', emptyStep, ON)
     const screen = Object.values(t).find((v) => v.role === 'screen')!
-    expect(screen.x).toBeCloseTo(34, 6)
-    expect(screen.y).toBeCloseTo(36, 6)
+    expect(screen.lane).toBe('CAM')
+    // on the lane itself (he takes the spot of it nearest his own slot, so his x barely moves off centre)
+    expect(distPointToSegment([screen.x, screen.y], [34, 20], [34, 50])).toBeLessThanOrEqual(LANE_BLOCK_R)
   })
 
   it('ball far to the left: the right side of the block narrows a long way in', () => {
