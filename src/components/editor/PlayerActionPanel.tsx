@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { AlertTriangle, ArrowDownLeft, MoveUpRight, Square, Wrench, X, Zap, Plus } from 'lucide-react'
 import type { ActionItem } from '@/lib/engine/actions'
 import { autoFixConflicts, detectConflicts } from '@/lib/engine/actions'
+import type { AISuggestedMove } from '@/lib/engine/attackingAI'
 
 // ─── Chip styles per action type ─────────────────────────────────────────────
 
@@ -42,6 +43,9 @@ interface PlayerActionPanelProps {
   onRemoveAction: (actionId: string) => void
   onAutoFix: (fixed: ActionItem[]) => void
   onClose: () => void
+  aiSuggestion?: AISuggestedMove
+  onAcceptSuggestion?: () => void
+  onDismissSuggestion?: () => void
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -58,6 +62,9 @@ export function PlayerActionPanel({
   onRemoveAction,
   onAutoFix,
   onClose,
+  aiSuggestion,
+  onAcceptSuggestion,
+  onDismissSuggestion,
 }: PlayerActionPanelProps) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const conflicts = detectConflicts(actions)
@@ -115,6 +122,39 @@ export function PlayerActionPanel({
             </div>
           )
         })}
+
+        {/* AI-suggested run chip (dashed border, lighter) */}
+        {aiSuggestion && (
+          <div
+            data-testid="ai-suggestion-chip"
+            className="flex shrink-0 select-none items-center gap-1.5 rounded-lg border border-dashed border-[#22c55e]/55 bg-[#14532d]/40 px-2.5 py-1.5 text-[12px] font-semibold text-[#86efac]/75"
+          >
+            <Zap className="size-3.5 shrink-0" aria-hidden />
+            <span className="whitespace-nowrap">Run ↗ (AI)</span>
+            {onAcceptSuggestion && (
+              <button
+                type="button"
+                aria-label="Accept AI suggestion"
+                data-testid="ai-accept"
+                onClick={onAcceptSuggestion}
+                className="ml-1 flex h-5 w-5 shrink-0 touch-manipulation items-center justify-center rounded-full bg-[#22c55e]/30 text-[10px] font-bold text-[#86efac] hover:bg-[#22c55e]/50 active:scale-95"
+              >
+                ✓
+              </button>
+            )}
+            {onDismissSuggestion && (
+              <button
+                type="button"
+                aria-label="Dismiss AI suggestion"
+                data-testid="ai-dismiss"
+                onClick={onDismissSuggestion}
+                className="flex h-4 w-4 shrink-0 touch-manipulation items-center justify-center rounded-full opacity-60 hover:opacity-100 active:scale-95"
+              >
+                <X className="size-3" aria-hidden />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Add action button */}
         <div className="relative shrink-0">

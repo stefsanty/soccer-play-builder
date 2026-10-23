@@ -718,6 +718,14 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           onRemoveAction={handleRemoveAction}
           onAutoFix={handleAutoFix}
           onClose={clearSelection}
+          aiSuggestion={rawSuggestions.find((s) => s.playerId === selectedPlayerId)}
+          onAcceptSuggestion={() => {
+            const sug = rawSuggestions.find((s) => s.playerId === selectedPlayerId)
+            if (sug) { movePlayer(sug.playerId, sug.toX, sug.toY, currentStepIndex, sug.endTime); announce(`${labelOf(sug.playerId)} moved`, { x: sug.toX, y: sug.toY }) }
+          }}
+          onDismissSuggestion={() => {
+            if (selectedPlayerId) setDismissedSuggestions((prev) => new Set([...prev, selectedPlayerId]))
+          }}
         />
       )}
       {/* Non-setup, nothing selected: hint strip */}
