@@ -1102,3 +1102,41 @@ describe('personal space: team-mates never stand on the same spot', () => {
     expect(worst).toBeGreaterThan(4)
   })
 })
+
+describe('lane value: a flank slot is paid to take the flank lane', () => {
+  /** A carrier plus two outlets — one wide, one central — and two defenders, one of each kind. */
+  const scene = () => {
+    const players: AiWorldPlayer[] = [
+      { id: 'oGK', team: 'opp', label: 'oGK', x: 34, y: 100, home: [34, 100] },
+      { id: 'oCB', team: 'opp', label: 'oCB', x: 34, y: 86, home: [34, 86] },
+      { id: 'oWIDE', team: 'opp', label: 'oWIDE', x: 56, y: 62, home: [56, 62] },
+      { id: 'oMID', team: 'opp', label: 'oMID', x: 34, y: 62, home: [34, 62] },
+      { id: 'C', team: 'ours', label: 'C', x: 34, y: 28, home: [34, 28] },
+      { id: 'WIDE', team: 'ours', label: 'WIDE', x: 54, y: 48, home: [54, 48] },
+      { id: 'MID', team: 'ours', label: 'MID', x: 32, y: 48, home: [32, 48] },
+    ]
+    return computeAiTargets({ players, ball: { x: 34, y: 28 }, memory: {}, owner: 'ours', focus: 'C' }, 'opp', emptyStep, ON)
+  }
+
+  it('the flank defender takes the flank outlet and the central one takes the central outlet', () => {
+    const t = scene()
+    expect(t.oWIDE.lane).toBe('WIDE')
+    expect(t.oMID.lane).toBe('MID')
+  })
+
+  it('no two cutters are ever given the same pass', () => {
+    const t = scene()
+    const lanes = Object.values(t).filter((v) => v.role === 'screen').map((v) => v.lane)
+    expect(new Set(lanes).size).toBe(lanes.length)
+  })
+
+  it('across the seeded play, every cut lane is held by exactly one player', () => {
+    for (const by of [20, 40, 60, 80]) {
+      for (const bx of [10, 26, 42, 58]) {
+        const t = computeAiTargets(world({ x: bx, y: by }, { owner: 'ours' }), 'opp', emptyStep, ON)
+        const lanes = Object.values(t).filter((v) => v.role === 'screen').map((v) => v.lane)
+        expect(new Set(lanes).size, `ball (${bx},${by})`).toBe(lanes.length)
+      }
+    }
+  })
+})

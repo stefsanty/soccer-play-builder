@@ -100,6 +100,13 @@ export const HANDOFF_R = 6
 export const WIDE_LANE_REACH = 12
 /** Shorter than this there is no lane to cut: the "receiver" is the carrier's own feet, and going there is pressing. */
 export const MIN_LANE = 8
+/**
+ * What an open lane is worth to the man weighing it up (see laneValue).
+ *   base      every uncovered lane is worth cutting at all
+ *   affinity  ...and worth more to a slot of its own width, which is what sends wingers to the wide ones
+ *   travel    ...less whatever it costs him to get there, as a share of LANE_REACH
+ */
+export const LANE_VALUE = { base: 1, affinity: 1.4, travel: 3.5 } as const
 /** How far sideways the cover may come off his own slot to get behind the press. */
 const COVER_REACH = 8
 /** How far a cutter will step off his own slot to get onto a lane. Past this he holds his position instead. */
@@ -519,25 +526,47 @@ export function computeAiTargets(
         return passingLaneOpen([ball.x, ball.y], [a.x, a.y], blockers)
       }
 
+      /**
+       * What cutting the pass to `a` is worth to `m`. A lane anyone already covers is not scored at all —
+       * canCut has dropped it, and `taken` below drops one a team-mate has just claimed — so every lane here
+       * is one nobody has, and the score only has to say which of them is worth most to whom.
+       */
+      const laneValue = (m: AiWorldPlayer, a: AiWorldPlayer): number => {
+        const s = slot.get(m.id)!
+        const half = PITCH_W / 2
+        const mWide = Math.abs(s[0] - CENTRE_X) / half
+        const aWide = Math.abs(a.x - CENTRE_X) / half
+        // A flank slot is worth most on a flank lane, a central slot on a central one. This is the whole of
+        // the winger rule: it is a reward, not a ban, so he drifts wide to find a lane nobody has rather than
+        // joining the congestion in the middle — and can still come inside when the middle is all there is.
+        const affinity = 1 - Math.abs(mWide - aWide)
+        const travel = dist(s, spotOnLane(m, a)) / LANE_REACH
+        return LANE_VALUE.base + LANE_VALUE.affinity * affinity - LANE_VALUE.travel * travel
+      }
+
       const screeners = field.filter((p) => !pulled.has(p.id) && lineOf.get(p.id) !== defIdx && forced[p.id] !== 'wide')
       const free = foes.filter((a) => a !== carrier && !onJob.has(a.id) && !onTheLine.has(a.id))
-      // Nearest the ball chooses first, and each takes the open lane nearest his own slot. That leaves no pair
-      // of cutters each wanting the other's lane: whoever chose first took the best lane open to him, so he
-      // never gains by trading, and a lane he would have preferred is one he could not legally cut anyway.
-      for (const m of [...screeners].sort((a, b) => dist([a.x, a.y], [ball.x, ball.y]) - dist([b.x, b.y], [ball.x, ball.y]))) {
-        const open = free
-          .filter((a) => !taken.has(a.id) && canCut(m, a))
-          .sort((a, b) => dist(m.home, [a.x, a.y]) - dist(m.home, [b.x, b.y]))[0]
-        if (!open) continue
-        taken.add(open.id)
+      // Every legal pairing, scored, best first. Taking them in that order spreads the cutters across
+      // DIFFERENT lanes: the moment a lane is claimed it is worth nothing to anybody else, so the next man's
+      // best remaining option is one nobody has — breadth before depth, and never two on one pass.
+      const pairs: { m: AiWorldPlayer; a: AiWorldPlayer; v: number }[] = []
+      for (const m of screeners) {
+        for (const a of free) if (canCut(m, a)) pairs.push({ m, a, v: laneValue(m, a) })
+      }
+      pairs.sort((x, y) => y.v - x.v)
+      const busy = new Set<string>()
+      for (const { m, a } of pairs) {
+        if (busy.has(m.id) || taken.has(a.id)) continue
+        busy.add(m.id)
+        taken.add(a.id)
         // He steps onto the lane properly — a man shading it from 6 m away blocks nothing. What keeps him in
         // the shape is that canCut refused any lane further than LANE_REACH from his slot, plus the cohesion
         // pass below pulling him back if covering it has stretched him off his neighbours.
-        const onLane = spotOnLane(m, open)
+        const onLane = spotOnLane(m, a)
         target.set(m.id, [clamp(onLane[0], 2, PITCH_W - 2), clamp(onLane[1] + goalDir * 1, 0, PITCH_H)])
         gain.set(m.id, GAIN.screen)
         role.set(m.id, 'screen')
-        lane.set(m.id, open.id)
+        lane.set(m.id, a.id)
       }
     }
 
