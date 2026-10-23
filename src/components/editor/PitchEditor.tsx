@@ -263,6 +263,18 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     haptic(8)
   }
 
+  const handleAutoFix = (fixed: ActionItem[]) => {
+    if (!step) return
+    for (const action of fixed) {
+      if (action.type === 'pass' && action.id.startsWith('pass:')) {
+        updatePass(currentStepIndex, passIndexFromId(action.id), { startTime: action.startTime, endTime: action.endTime })
+      } else if (action.type === 'run' && action.id.startsWith('run:')) {
+        updateMove(currentStepIndex, playerIdFromRunId(action.id), { startTime: action.startTime, endTime: action.endTime })
+      }
+    }
+    haptic(15)
+  }
+
   const handleAddHold = () => {
     if (!selectedPlayerId || !step) return
     const pos = (prevPositions ?? positions).get(selectedPlayerId)
@@ -704,6 +716,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           onAddRun={() => changeMode('run')}
           onAddHold={handleAddHold}
           onRemoveAction={handleRemoveAction}
+          onAutoFix={handleAutoFix}
           onClose={clearSelection}
         />
       )}

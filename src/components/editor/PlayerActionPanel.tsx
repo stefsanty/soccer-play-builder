@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { ArrowDownLeft, MoveUpRight, Square, X, Zap, Plus } from 'lucide-react'
+import { AlertTriangle, ArrowDownLeft, MoveUpRight, Square, Wrench, X, Zap, Plus } from 'lucide-react'
 import type { ActionItem } from '@/lib/engine/actions'
+import { autoFixConflicts, detectConflicts } from '@/lib/engine/actions'
 
 // ─── Chip styles per action type ─────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ interface PlayerActionPanelProps {
   onAddRun: () => void
   onAddHold: () => void
   onRemoveAction: (actionId: string) => void
+  onAutoFix: (fixed: ActionItem[]) => void
   onClose: () => void
 }
 
@@ -54,9 +56,11 @@ export function PlayerActionPanel({
   onAddRun,
   onAddHold,
   onRemoveAction,
+  onAutoFix,
   onClose,
 }: PlayerActionPanelProps) {
   const [pickerOpen, setPickerOpen] = useState(false)
+  const conflicts = detectConflicts(actions)
 
   const PICKER = [
     { label: 'Pass to player', Icon: MoveUpRight, color: 'text-[#fde68a]', onSelect: onAddPass },
@@ -151,6 +155,25 @@ export function PlayerActionPanel({
           )}
         </div>
       </div>
+      {/* Conflict strip */}
+      {conflicts.length > 0 && (
+        <div className="flex shrink-0 items-center gap-2 border-t border-[#7f1d1d]/60 bg-[#450a0a]/60 px-3 py-1.5">
+          <AlertTriangle className="size-3.5 shrink-0 text-[#f87171]" aria-hidden />
+          <span className="min-w-0 flex-1 text-[11px] text-[#fca5a5]">
+            {conflicts[0].description}
+            {conflicts.length > 1 && ` (+${conflicts.length - 1} more)`}
+          </span>
+          <button
+            type="button"
+            data-testid="auto-fix-btn"
+            onClick={() => onAutoFix(autoFixConflicts(actions))}
+            className="flex shrink-0 touch-manipulation items-center gap-1 rounded-full bg-[#7f1d1d]/80 px-2.5 py-1 text-[11px] font-semibold text-[#fca5a5] hover:bg-[#991b1b] active:scale-95"
+          >
+            <Wrench className="size-3 shrink-0" aria-hidden />
+            Auto-fix
+          </button>
+        </div>
+      )}
     </section>
   )
 }
