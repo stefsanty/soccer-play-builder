@@ -1,15 +1,15 @@
 'use client'
 
 /**
- * @description The editor's default bottom panel. A full-play timeline across every step, with the first
- * two indexes (SETUP) muted and the rest numbered, and a Play-all button that advances through them on a
- * timer. The pitch above does not change: this is a step-level slideshow of what the editor would be
- * showing anyway, not the frame-level animation of `AnimatedPitch` (preview mode).
+ * @description The editor's default bottom panel. A full-play timeline across every step, with step 0
+ * (SETUP) muted and the rest numbered, and a Play-all button that chain-plays each step's animation
+ * end to end (step 1, then step 2, …). Chain-play is driven by `isPlayingAll` in the store: PitchEditor
+ * swaps the static pitch for an `AnimatedPitch` when it is true, and PlayModeBar advances the step
+ * when PitchEditor's `onComplete` lands.
  * @props { onEnterEdit: () => void }
- * @dataDependencies editorStore (play, currentStepIndex, setCurrentStep)
+ * @dataDependencies editorStore (play, currentStepIndex, setCurrentStep, isPlayingAll, setPlayingAll)
  */
 
-import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Pause, Pencil, Play as PlayIcon, RotateCcw } from 'lucide-react'
 import { useEditorStore } from '@/lib/store/editorStore'
 import { haptic } from '@/lib/haptics'
@@ -19,9 +19,6 @@ import { STRIP_HEIGHT } from './StepTextPanel'
 /** How many leading step indexes are the pre-play setup block (starting positions). The rest are play. */
 export const SETUP_COUNT = 1
 
-/** How long each step is held before Play-all advances. ~1.5s reads as "slide" pace, not animation. */
-const STEP_INTERVAL_MS = 1500
-
 interface PlayModeBarProps {
   onEnterEdit: () => void
 }
@@ -30,55 +27,34 @@ export function PlayModeBar({ onEnterEdit }: PlayModeBarProps) {
   const play = useEditorStore((s) => s.play)
   const currentStepIndex = useEditorStore((s) => s.currentStepIndex)
   const setCurrentStep = useEditorStore((s) => s.setCurrentStep)
-
-  const [isPlaying, setIsPlaying] = useState(false)
-  const intervalRef = useRef<number | null>(null)
-
-  const stop = () => {
-    if (intervalRef.current !== null) {
-      window.clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
-    setIsPlaying(false)
-  }
-
-  // Clear on unmount so navigating away never leaves a stray timer firing step changes.
-  useEffect(() => () => stop(), [])
+  const isPlayingAll = useEditorStore((s) => s.isPlayingAll)
+  const setPlayingAll = useEditorStore((s) => s.setPlayingAll)
 
   const stepsLength = play?.steps.length ?? 0
+  const firstPlayStep = Math.min(SETUP_COUNT, Math.max(0, stepsLength - 1))
   const atStart = currentStepIndex <= 0
   const atEnd = currentStepIndex >= stepsLength - 1
 
-  const start = () => {
-    if (stepsLength === 0) return
+  // Start chain-play from step 1 (first play step). PitchEditor sees isPlayingAll and renders
+  // AnimatedPitch; its onComplete advances the step; the chain stops at the last step on its own.
+  const startPlayAll = () => {
+    if (stepsLength <= firstPlayStep) return
     haptic(8)
-    // Tapping Play at the end restarts from Setup; otherwise it picks up from where you are.
-    const from = currentStepIndex >= stepsLength - 1 ? 0 : currentStepIndex
-    if (from !== currentStepIndex) setCurrentStep(from)
-    setIsPlaying(true)
-    intervalRef.current = window.setInterval(() => {
-      // Reading from the store keeps the timer in sync with manual jumps (tap another chip while playing).
-      const i = useEditorStore.getState().currentStepIndex
-      const next = i + 1
-      if (next >= stepsLength) {
-        stop()
-      } else {
-        setCurrentStep(next)
-      }
-    }, STEP_INTERVAL_MS)
+    if (currentStepIndex !== firstPlayStep) setCurrentStep(firstPlayStep)
+    setPlayingAll(true)
   }
 
   const togglePlay = () => {
-    if (isPlaying) {
+    if (isPlayingAll) {
       haptic(8)
-      stop()
+      setPlayingAll(false)
     } else {
-      start()
+      startPlayAll()
     }
   }
 
   const goTo = (i: number) => {
-    stop()
+    if (isPlayingAll) setPlayingAll(false)
     haptic(8)
     setCurrentStep(i)
   }
@@ -161,7 +137,7 @@ export function PlayModeBar({ onEnterEdit }: PlayModeBarProps) {
           data-testid="play-restart"
           aria-label="Restart from the beginning"
           onClick={() => goTo(0)}
-          disabled={atStart && !isPlaying}
+          disabled={atStart && !isPlayingAll}
           className="flex size-11 shrink-0 touch-manipulation items-center justify-center rounded-[10px] text-[#cbd5e1] transition-all duration-100 hover:bg-white/5 active:scale-95 active:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100"
         >
           <RotateCcw className="size-5" aria-hidden />
@@ -179,12 +155,12 @@ export function PlayModeBar({ onEnterEdit }: PlayModeBarProps) {
         <button
           type="button"
           data-testid="play-all"
-          aria-label={isPlaying ? 'Pause' : 'Play all steps'}
+          aria-label={isPlayingAll ? 'Pause' : 'Play all steps'}
           onClick={togglePlay}
           className="flex h-11 flex-1 touch-manipulation items-center justify-center gap-2 rounded-[10px] bg-[var(--app-accent)] px-4 text-sm font-bold text-[var(--app-accent-ink)] transition-all duration-100 active:scale-95 active:brightness-125"
         >
-          {isPlaying ? <Pause className="size-5" aria-hidden /> : <PlayIcon className="size-5" aria-hidden />}
-          {isPlaying ? 'Pause' : 'Play all'}
+          {isPlayingAll ? <Pause className="size-5" aria-hidden /> : <PlayIcon className="size-5" aria-hidden />}
+          {isPlayingAll ? 'Pause' : 'Play all'}
         </button>
         <button
           type="button"

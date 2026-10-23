@@ -14,7 +14,7 @@
  * @dataDependencies useAnimationEngine
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, CircleDot, Gauge, Pause, Pencil, Play as PlayIcon, RotateCcw } from 'lucide-react'
 import type { Play } from '@/lib/types/play'
 import { mToSvg } from '@/lib/engine/pitch'
@@ -36,6 +36,14 @@ interface AnimatedPitchProps {
   fill?: boolean
   /** Called when the user taps "Edit" in the bottom bar (editor fill mode only). */
   onSwitchToEdit?: () => void
+  /** Hide the playback controls row (restart/prev/play/next/speed/edit). Fill mode only. */
+  hideControls?: boolean
+  /** Hide the step-chip strip. Fill mode only. */
+  hideStepBar?: boolean
+  /** Hide the step-text panel. Fill mode only. */
+  hideStepText?: boolean
+  /** Called once each time the current step's animation reaches progress 1 — not on manual pause. */
+  onComplete?: () => void
 }
 
 const SPEEDS = [0.5, 1, 1.5, 2]
@@ -50,7 +58,7 @@ const pt = (x: number, y: number) => {
 const ctrl =
   'flex h-11 touch-manipulation select-none flex-col items-center justify-center gap-0.5 rounded-[10px] text-[10px] font-medium transition-all duration-100 active:scale-95 disabled:opacity-40 disabled:active:scale-100'
 
-export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, fill = false, onSwitchToEdit }: AnimatedPitchProps) {
+export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, fill = false, onSwitchToEdit, hideControls = false, hideStepBar = false, hideStepText = false, onComplete }: AnimatedPitchProps) {
   const [speed, setSpeed] = useState(1)
   const engine = useAnimationEngine(play, stepIndex, speed)
   const { frame, timeline, time, isPlaying, progress } = engine
@@ -59,6 +67,15 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
   useEffect(() => {
     if (autoPlay) startPlayback()
   }, [autoPlay, play.id, stepIndex, startPlayback])
+
+  // Fire onComplete once per end-of-step. The animation engine goes from isPlaying=true to false at
+  // progress=1 when it finishes on its own (manual pause leaves progress < 1), so we only trigger on
+  // that specific transition — a chain-play caller advances the step from here.
+  const wasPlayingRef = useRef(false)
+  useEffect(() => {
+    if (wasPlayingRef.current && !isPlaying && progress >= 0.999) onComplete?.()
+    wasPlayingRef.current = isPlaying
+  }, [isPlaying, progress, onComplete])
 
   const total = play.steps.length
   const step = play.steps[stepIndex]
@@ -403,7 +420,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
             <FormationToggle hasOpp={play.players.some((p) => p.team === 'opp')} />
           </div>
         </div>
-        {step && (
+        {!hideStepText && step && (
           <StepTextPanel
             key={step.id}
             badge={step.isAltBranch ? (step.altLabel ?? stepIndex) : stepIndex}
@@ -413,8 +430,8 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
             opp={step.narrativeOpp}
           />
         )}
-        {stepBar}
-        {controls}
+        {!hideStepBar && stepBar}
+        {!hideControls && controls}
       </div>
     )
   }

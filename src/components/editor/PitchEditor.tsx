@@ -6,7 +6,7 @@
  * @dataDependencies editorStore (useEditorStore)
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEditorStore, type EditorMode } from '@/lib/store/editorStore'
 import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { PitchMarkings } from './PitchMarkings'
@@ -60,11 +60,13 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const play = useEditorStore((s) => s.play)
   const mode = useEditorStore((s) => s.mode)
   const bottomMode = useEditorStore((s) => s.bottomMode)
+  const isPlayingAll = useEditorStore((s) => s.isPlayingAll)
   const currentStepIndex = useEditorStore((s) => s.currentStepIndex)
   const selectedPlayerId = useEditorStore((s) => s.selectedPlayerId)
   const setPlay = useEditorStore((s) => s.setPlay)
   const setMode = useEditorStore((s) => s.setMode)
   const setBottomMode = useEditorStore((s) => s.setBottomMode)
+  const setPlayingAll = useEditorStore((s) => s.setPlayingAll)
   const selectPlayer = useEditorStore((s) => s.selectPlayer)
   const setCurrentStep = useEditorStore((s) => s.setCurrentStep)
   const addStep = useEditorStore((s) => s.addStep)
@@ -271,11 +273,32 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     : mode === 'run' ? (pendingFrom ? 'Tap the pitch to set the run destination' : 'Tap a player, then a destination')
     : null
 
+  // Chain-play from Play Mode: each step's animation finishes, this fires, and we move to the next one.
+  // At the last step the chain stops; the static editor pitch takes over and holds its end state.
+  const handleStepComplete = useCallback(() => {
+    if (!play) return
+    const next = currentStepIndex + 1
+    if (next >= play.steps.length) setPlayingAll(false)
+    else setCurrentStep(next)
+  }, [play, currentStepIndex, setCurrentStep, setPlayingAll])
+
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col">
       {mode === 'preview' && play ? (
         <AnimatedPitch fill play={play} stepIndex={currentStepIndex} onStepChange={setCurrentStep}
           onSwitchToEdit={() => { haptic(10); selectPlayer(null); setMode('select'); setPreviewTime(0) }} />
+      ) : isPlayingAll && play ? (
+        // Play Mode is chain-playing: use the animation engine, but strip its own bars so Play Mode's
+        // StepTextPanel and PlayModeBar below stay the UI the user interacts with.
+        <AnimatedPitch
+          fill
+          play={play}
+          stepIndex={currentStepIndex}
+          hideControls
+          hideStepBar
+          hideStepText
+          onComplete={handleStepComplete}
+        />
       ) : (
         <div className="relative min-h-0 flex-1 bg-[var(--pitch)]">
         <svg
@@ -483,7 +506,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
         />
       )}
       {mode !== 'preview' && !behaviorOpen && bottomMode === 'play' && (
-        <PlayModeBar onEnterEdit={() => { haptic(10); setBottomMode('edit') }} />
+        <PlayModeBar onEnterEdit={() => { haptic(10); setPlayingAll(false); setBottomMode('edit') }} />
       )}
       {mode !== 'preview' && !behaviorOpen && bottomMode === 'edit' && (
         <>

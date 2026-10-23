@@ -24,6 +24,9 @@ interface EditorState {
   currentStepIndex: number
   mode: EditorMode
   bottomMode: BottomMode
+  /** Play Mode is chain-playing step animations end to end: step 1's animation, then step 2's, and so
+   *  on until the last step. Separate from `isPlaying`, which is the preview-mode single-step engine. */
+  isPlayingAll: boolean
   selectedPlayerId: string | null
   isDirty: boolean
   isPlaying: boolean
@@ -34,6 +37,7 @@ interface EditorState {
   setPlay: (play: Play) => void
   setMode: (mode: EditorMode) => void
   setBottomMode: (mode: BottomMode) => void
+  setPlayingAll: (v: boolean) => void
   selectPlayer: (id: string | null) => void
   setCurrentStep: (index: number) => void
   addStep: () => void
@@ -62,6 +66,7 @@ export const useEditorStore = create<EditorState>()(
     currentStepIndex: 0,
     mode: 'select',
     bottomMode: 'play',
+    isPlayingAll: false,
     selectedPlayerId: null,
     isDirty: false,
     isPlaying: false,
@@ -102,6 +107,7 @@ export const useEditorStore = create<EditorState>()(
     }),
     setMode: (mode) => set((s) => { s.mode = mode }),
     setBottomMode: (bottomMode) => set((s) => { s.bottomMode = bottomMode }),
+    setPlayingAll: (isPlayingAll) => set((s) => { s.isPlayingAll = isPlayingAll }),
     selectPlayer: (id) => set((s) => { s.selectedPlayerId = id }),
     setCurrentStep: (index) => set((s) => { s.currentStepIndex = index; s.isPlaying = false; s.previewTime = 0 }),
     addStep: () => set((s) => {
