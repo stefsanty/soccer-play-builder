@@ -14,6 +14,15 @@ function world(ball: { x: number; y: number } | null, extra: Partial<AiWorld> = 
   const players: AiWorldPlayer[] = seeded().players.map((p) => ({ id: p.id, team: p.team, label: p.label, x: p.x, y: p.y, home: [p.x, p.y] }))
   return { players, ball, memory: {}, ...extra }
 }
+/**
+ * The same block with the attacking side withdrawn into its own half, so phase 1 gives nobody a man and
+ * what is left acting on the block is the ball pull alone. The slide tests below are about how that pull
+ * fades with distance, and a defender who has been given somebody is placed by that instead.
+ */
+function blockOnly(ball: { x: number; y: number }): AiWorld {
+  const w = world(ball, { owner: 'ours' })
+  return { ...w, players: w.players.map((p) => (p.team === 'ours' ? { ...p, y: Math.min(p.y, 22) } : p)) }
+}
 const emptyStep = { defenderRules: {}, moves: [] }
 const ON = { on: true } as const
 const DEFAULTS = resolveAiParams({}) // aggressiveness 50, line height 50, width 50
@@ -78,8 +87,14 @@ describe('computeAiTargets', () => {
     const t = computeAiTargets(w, 'opp', emptyStep, ON)
     const shiftX = blockShift(10)
     expect(shiftX).toBeLessThan(-3)
-    // the centre-backs come across to the ball: the near one a long way, the far one barely at all
-    expect(t.oRCB.x).toBeLessThan(homeOf(w, 'oRCB')[0] - 3)
+    // The block as a whole ends up nearer the ball than the formation puts it. It is measured over the
+    // block rather than on a named centre-back because phase 1 now hands out the jobs first: which of the
+    // two centre-backs ends up covering the press and which slides is decided by who else has a man, and
+    // was never the point of this test.
+    const outfield = Object.keys(t).filter((id) => t[id].role !== 'gk')
+    const meanDrift = outfield.reduce((acc, id) => acc + (t[id].x - homeOf(w, id)[0]), 0) / outfield.length
+    expect(meanDrift).toBeLessThan(-2)
+    // the far-side centre-back barely moves: the slide fades with distance from the ball
     expect(homeOf(w, 'oLCB')[0] - t.oLCB.x).toBeLessThanOrEqual(3)
     // the far flank holds its ground instead of being dragged across — that is the wing a long ball would find
     expect(Math.abs(t.oLB.x - homeOf(w, 'oLB')[0])).toBeLessThanOrEqual(WIDE_HOLD.loose)
@@ -87,7 +102,7 @@ describe('computeAiTargets', () => {
     expect(Math.abs(t.oRW.x - homeOf(w, 'oRW')[0])).toBeLessThanOrEqual(WIDE_HOLD.loose)
     // central players stay central: at most 3 m from home
     // (a player picked as presser / cover / lane screen is placed by that job instead of by the block)
-    const blockCentral = ['oLCB', 'oST', 'oCAM'].filter((id) => ['line', 'wide'].includes(t[id].role))
+    const blockCentral = ['oLCB', 'oST', 'oCAM'].filter((id) => ['line', 'wide', 'mark'].includes(t[id].role))
     expect(blockCentral.length).toBeGreaterThanOrEqual(2)
     for (const id of blockCentral) {
       expect(Math.abs(t[id].x - homeOf(w, id)[0])).toBeLessThanOrEqual(3 + 1e-9)
@@ -397,7 +412,7 @@ describe('pressing: one presser, and the block keeps its shape behind him', () =
     for (const ball of [{ x: 34, y: 85 }, { x: 14, y: 70 }, { x: 50, y: 60 }]) {
       const t = computeAiTargets(world(ball), 'opp', emptyStep, { on: true, aggressiveness: 100 })
       // everyone else is holding the block or cutting a lane — no third man goes to the carrier
-      const breaking = Object.values(t).filter((v) => !['line', 'wide', 'screen', 'gk'].includes(v.role))
+      const breaking = Object.values(t).filter((v) => !['line', 'wide', 'screen', 'mark', 'gk'].includes(v.role))
       expect(breaking.map((v) => v.role).sort()).toEqual(['cover', 'presser'])
     }
   })
@@ -498,7 +513,8 @@ describe('lane cutters: the rule, on the test play phase 1 (a press on the blue 
       .slice(0, 2)
     expect(wideSlots).toHaveLength(2)
     for (const p of wideSlots) {
-      expect(t[p.id].role).toBe('wide')
+      // holding the block, whether or not phase 1 also gave him a man to lean on out there
+      expect(['wide', 'mark']).toContain(t[p.id].role)
       expect(Math.abs(t[p.id].x - p.home[0])).toBeLessThanOrEqual(DEFAULTS.shiftMax + 1e-9)
     }
   })
@@ -546,7 +562,7 @@ describe('width: the block keeps a flank for the long diagonal to beat', () => {
   })
 
   it('the pull towards the ball dies away with distance: the near side slides, the far side does not', () => {
-    const w = world({ x: 6, y: 60 }, { owner: 'ours' })
+    const w = blockOnly({ x: 6, y: 60 })
     const t = computeAiTargets(w, 'opp', emptyStep, ON)
     const drift = (id: string) => Math.abs(t[id].x - homeOf(w, id)[0])
     // oRCB's slot is on the ball side, oLCB's is on the far side; both are centre-backs under the same rule
@@ -583,7 +599,7 @@ describe('width: the block keeps a flank for the long diagonal to beat', () => {
   })
 
   it('a centre-back still slides with the ball — the hold is for flank slots only', () => {
-    const w = world({ x: 6, y: 60 }, { owner: 'ours' })
+    const w = blockOnly({ x: 6, y: 60 })
     const t = computeAiTargets(w, 'opp', emptyStep, ON)
     expect(homeOf(w, 'oRCB')[0] - t.oRCB.x).toBeGreaterThan(3)
   })
@@ -1021,7 +1037,7 @@ describe('gravity: an opponent already covered does not pull a second defender',
 
   it('is drawn across to him when nobody else is near him', () => {
     const t = scene([10, 78]) // oD1 is away on the other flank
-    expect(t.oD2.role).toBe('line')
+    expect(['line', 'mark']).toContain(t.oD2.role) // holding the block, now answering for A as well
     expect(t.oD2.x).toBeGreaterThan(47) // comes off his slot at 44 towards A at 54
   })
 

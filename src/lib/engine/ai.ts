@@ -104,9 +104,11 @@ export const MIN_LANE = 8
  * What an open lane is worth to the man weighing it up (see laneValue).
  *   base      every uncovered lane is worth cutting at all
  *   affinity  ...and worth more to a slot of its own width, which is what sends wingers to the wide ones
+ *   own       ...and worth far more on the man he already answers for, so his own marker gets first refusal
+ *             on that pass rather than a team-mate taking it while he stands on the receiver as well
  *   travel    ...less whatever it costs him to get there, as a share of LANE_REACH
  */
-export const LANE_VALUE = { base: 1, affinity: 1.4, travel: 3.5 } as const
+export const LANE_VALUE = { base: 1, affinity: 1.4, own: 4, travel: 3.5 } as const
 /** How far sideways the cover may come off his own slot to get behind the press. */
 const COVER_REACH = 8
 /** How far a cutter will step off his own slot to get onto a lane. Past this he holds his position instead. */
@@ -145,9 +147,28 @@ const REPEL_STEP = 10
  * `ballPress` multiplies the ball pull while a hard press is on: the block squeezes as a unit instead of
  * sending a second chaser after the carrier.
  */
-export const W = { slot: 1, ball: 2.5, gravity: 2.8, repel: 0.5, neighbour: 0.9, displace: 3.0, ballPress: 1.6 } as const
+export const W = { slot: 1, ball: 2.5, gravity: 2.8, repel: 0.5, neighbour: 0.9, displace: 3.0, ballPress: 1.6, markBind: 2.5 } as const
 /** How many times the weighed pulls are re-solved; neighbours move, so it settles rather than resolving once. */
 const SOLVE_PASSES = 4
+
+/**
+ * What it costs the team for one defender to answer for one opponent, in metres of defensive disruption:
+ *   distance   how far he has to travel to get goal-side of the man
+ *   displace   how far that leaves him from the slot his formation wants him in
+ *   tier       a full mismatch between his line and the man's depth — a centre-back sent out at a
+ *              deep-lying midfielder, or a striker sent back to pick someone up in the box
+ *   shortfall  how far his own positional limits still leave him from the man: a flank player held nine
+ *              metres off a central opponent is not answering for him, whatever the map says
+ */
+export const COST = { distance: 1, displace: 0.6, tier: 25, shortfall: 3 } as const
+/** Past this, answering for a man is a chase across the pitch rather than a job: nobody is given him. */
+export const MARK_MAX = 45
+/** A man may only be given up when somebody else can take him on for less than this. */
+export const HANDOFF_MAX = 30
+/** What it adds to a handoff to call on a defender who is already answering for somebody else. */
+export const HANDOFF_BUSY = 10
+/** What leaving your man is worth, in the same units as the cost, weighed against what the handoff costs. */
+export const WORTH = { cover: 12, screen: 8 } as const
 
 const PITCH_W = 68
 const PITCH_H = 105
@@ -307,6 +328,167 @@ function lineIndexes(players: AiWorldPlayer[], depthOf: (y: number) => number): 
   return { index, count: line + 1, homeDepth }
 }
 
+/** What phase 1 has made a defender answerable for this frame. */
+export type AssignmentType = 'press' | 'mark' | 'zone' | 'free'
+
+export interface Assignment {
+  type: AssignmentType
+  /** For 'mark': the opponent he answers for. */
+  opponent?: string
+  /**
+   * For 'mark': what it would cost the next-best defender to take this man on instead — the price of the
+   * handoff. Infinity when there is nobody spare at all, which is what makes a mark binding.
+   */
+  handoffCost: number
+}
+
+export interface AssignmentConfig {
+  /** Goal-side direction in y for the defending team: +1 defending y = 105, -1 defending y = 0. */
+  goalDir: 1 | -1
+  ball: XY
+  /** Where the formation puts each defender this frame; his home when not given. */
+  slot?: ReadonlyMap<string, XY>
+  /** The opponent on the ball: he is pressed, not marked. */
+  carrier?: string | null
+  /** The defender going to the ball, if one has been picked. */
+  presser?: string | null
+  /** The one behind him, once phase 2 has picked him: he is going to the ball as well. */
+  cover?: string | null
+  /** Opponents an authored rule already answers for: defenderId -> opponentId. */
+  duty?: ReadonlyMap<string, string>
+  /**
+   * Where a defender would actually be allowed to stand to cover a point — his flank hold, his central
+   * slot. Without it a wide man is handed a central opponent he is then held nine metres short of, and
+   * having "somebody on him" is what stops anyone else going.
+   */
+  hold?: (d: AiWorldPlayer, at: XY) => XY
+}
+
+/**
+ * PHASE 1 — who answers for whom, decided for the team as a whole before anybody is told where to stand.
+ *
+ * Scoring each defender on his own is what lets two of them want the same man while a third is left free:
+ * every one of them is individually right and the team is wrong. So the responsibilities are handed out
+ * first, once, from a cost matrix (see COST) — the most dangerous opponent picking first, each taking the
+ * cheapest defender still spare. Phase 2 (computeAiTargets) then only has to decide where a man stands to
+ * do the job he has already been given.
+ *
+ * Every mark also carries what it would cost to hand that man on (see `handoffCost`), which is what the
+ * release rule weighs when something else — the ball, a press to cover, a lane to cut — tries to pull the
+ * marker away. See canReleaseMark.
+ */
+export function computeAssignments(
+  defenders: readonly AiWorldPlayer[],
+  opponents: readonly AiWorldPlayer[],
+  config: AssignmentConfig,
+): Map<string, Assignment> {
+  const { goalDir, carrier = null } = config
+  const depthOf = (y: number) => (goalDir === 1 ? PITCH_H - y : y)
+  const slotOf = (d: AiWorldPlayer): XY => config.slot?.get(d.id) ?? d.home
+  const out = new Map<string, Assignment>()
+
+  const field = defenders.filter((p) => !isGk(p))
+  const { index: lineOf, count: lineCount } = lineIndexes(field, depthOf)
+
+  // ---- who is already spoken for ----
+  // An authored rule outranks the AI: the man it answers for is taken, and whoever is on the ball through
+  // one is pressing rather than marking. (Those players need not be in `defenders` at all — the AI does
+  // not drive them — but what they are doing still decides what is left for the block.)
+  const spokenFor = new Set<string>(config.duty ? [...config.duty.values()] : [])
+  for (const d of field) {
+    const att = config.duty?.get(d.id) ?? null
+    if (d.id === config.presser || d.id === config.cover || (att !== null && att === carrier)) out.set(d.id, { type: 'press', handoffCost: Infinity })
+    else if (att !== null) out.set(d.id, { type: 'mark', opponent: att, handoffCost: Infinity })
+  }
+  const available = field.filter((d) => !out.has(d.id))
+
+  // ---- which opponents this block is answerable for ----
+  // The same reach the shape already reacts to (GRAVITY_R). A man further than that from every slot is
+  // not this block's business: the attacking side's own back line, forty metres behind the ball, is
+  // "unmarked" in the arithmetic sense and ought to be.
+  const dangerous = opponents.filter(
+    (a) => !isGk(a) && a.id !== carrier && !spokenFor.has(a.id)
+      && available.some((d) => dist(slotOf(d), [a.x, a.y]) < GRAVITY_R),
+  )
+
+  // A line and an opponent match when they sit at the same depth in the picture: the deepest line answers
+  // for the man nearest the defended goal, the most advanced line for the one furthest from it. Both are
+  // normalised over what is actually on the pitch, so the match does not depend on the metre.
+  const depths = dangerous.map((a) => depthOf(a.y))
+  const lo = Math.min(...depths)
+  const hi = Math.max(...depths)
+  const oppTier = (a: AiWorldPlayer) => (hi - lo < 1e-9 ? 0 : (depthOf(a.y) - lo) / (hi - lo))
+  const defTier = (d: AiWorldPlayer) => (lineCount <= 1 ? 0 : (lineOf.get(d.id) ?? 0) / (lineCount - 1))
+
+  /** Goal-side of a man: where answering for him puts you. */
+  const markSpot = (a: AiWorldPlayer): XY => [a.x, clamp(a.y + goalDir * GRAVITY_GAP, 0, PITCH_H)]
+  const cost = (d: AiWorldPlayer, a: AiWorldPlayer): number => {
+    const at = markSpot(a)
+    const can = config.hold ? config.hold(d, at) : at
+    return COST.distance * dist([d.x, d.y], can)
+      + COST.displace * dist(slotOf(d), can)
+      + COST.tier * Math.abs(defTier(d) - oppTier(a))
+      + COST.shortfall * dist(can, at) // how far short of the man his own limits leave him
+  }
+
+  // ---- the assignment ----
+  // Greedy, with the most dangerous man picking first. Walking the whole matrix cheapest-pair-first would
+  // not do: it spends the one defender who could have reached a man on some cheaper pairing elsewhere and
+  // leaves that man open, which is the very thing this phase exists to stop.
+  const byThreat = [...dangerous].sort((a, b) => depthOf(a.y) - depthOf(b.y))
+  const taken = new Set<string>()
+  const marks: { d: AiWorldPlayer; a: AiWorldPlayer }[] = []
+  for (const a of byThreat) {
+    let best: { d: AiWorldPlayer; c: number } | null = null
+    for (const d of available) {
+      if (taken.has(d.id)) continue
+      const c = cost(d, a)
+      if (c > MARK_MAX) continue
+      if (!best || c < best.c) best = { d, c }
+    }
+    if (!best) continue
+    taken.add(best.d.id)
+    marks.push({ d: best.d, a })
+  }
+
+  // Whoever was given nobody: the back line's standing job is the line itself, so it holds its zone;
+  // ahead of it a spare man is free to go to the ball, cover a press or cut a lane.
+  const spare = available.filter((d) => !taken.has(d.id))
+  for (const d of spare) out.set(d.id, { type: (lineOf.get(d.id) ?? 1) === 0 ? 'zone' : 'free', handoffCost: Infinity })
+
+  // What each man would cost to hand on. A handoff is a swap, not a favour from somebody idle, so every
+  // other defender is a candidate — the one going to the ball excepted, since he is not coming back. A man
+  // who already answers for somebody is costed higher: calling on him means giving up what he has.
+  // (Counting only the idle ones made nearly every mark cost Infinity to hand on, because in a settled
+  //  block there are hardly any: "nobody is free this instant" is not the same as "nobody can reach him".)
+  const marked = new Set(marks.map((m) => m.d.id))
+  for (const { d, a } of marks) {
+    const others = available.filter((q) => q.id !== d.id)
+    out.set(d.id, {
+      type: 'mark',
+      opponent: a.id,
+      handoffCost: Math.min(Infinity, ...others.map((q) => cost(q, a) + (marked.has(q.id) ? HANDOFF_BUSY : 0))),
+    })
+  }
+  return out
+}
+
+/**
+ * May the defender holding `a` leave the man he was given, for something worth `worth` to the team?
+ *
+ * Both halves of the rule have to hold. Somebody else must be able to take the man on at all — a handoff
+ * costing less than HANDOFF_MAX, so leaving does not simply abandon him — AND the reason for going has to
+ * be worth more than that handoff costs. With no valid handoff the mark holds, however strong the local
+ * pull: a defender who is the only one who can reach a man does not get to go and do something else.
+ */
+export function canReleaseMark(a: Assignment | undefined, worth: number): boolean {
+  if (!a || a.type !== 'mark') return true
+  return a.handoffCost <= HANDOFF_MAX && worth > a.handoffCost
+}
+
+/** How firmly a mark binds: 0 when a team-mate could take the man on for nothing, 1 when nobody can. */
+const bindOf = (a: Assignment | undefined) => (a?.type === 'mark' ? clamp(a.handoffCost / HANDOFF_MAX, 0, 1) : 0)
+
 /**
  * Targets for the team's AI-driven players.
  *  - Eligible: not in `config.exclude`, not locked, no move this step, and no authored rule that has taken
@@ -429,16 +611,13 @@ export function computeAiTargets(
    * the wing it is there to deny), and a lane cutter staying on the pass he was given, the solve deciding
    * only where along it he stands.
    */
-  const confine = (p: AiWorldPlayer, pt: XY): XY => {
-    const recv = foes.find((f) => f.id === lane.get(p.id))
-    if (recv) {
-      // A cutter's lane IS his permitted ground — canCut already checked it against his flank and his reach
-      // before giving it to him — so the lane governs here and the solve only picks where along it he stands.
-      // Running the lateral limits afterwards instead would just push him off the pass.
-      const from: XY = [clamp(pt[0], 2, PITCH_W - 2), clamp(pt[1], 2, PITCH_H - 2)]
-      const on = closestPointOnSegment(from, [ball.x, ball.y], [recv.x, recv.y], MIN_LANE / 2)
-      return [on[0], clamp(on[1] + goalDir * 1, 0, PITCH_H)]
-    }
+  /**
+   * The lateral limits on their own: a central slot stays central, a flank slot is never drawn further in
+   * than the width allows (outwards it is free — that is the wing it is there to deny). Phase 1 asks the
+   * same question when it costs a mark, because a man he will not be allowed to get near is not a man he
+   * can answer for.
+   */
+  const holdLimits = (p: AiWorldPlayer, pt: XY): XY => {
     let x = pt[0]
     const off = p.home[0] - CENTRE_X
     if (Math.abs(off) < CENTRAL_OFF) {
@@ -450,7 +629,24 @@ export function computeAiTargets(
     return [clamp(x, xLo, xHi), clamp(pt[1], 2, PITCH_H - 2)]
   }
 
+  const confine = (p: AiWorldPlayer, pt: XY): XY => {
+    const recv = foes.find((f) => f.id === lane.get(p.id))
+    if (recv) {
+      // A cutter's lane IS his permitted ground — canCut already checked it against his flank and his reach
+      // before giving it to him — so the lane governs here and the solve only picks where along it he stands.
+      // Running the lateral limits afterwards instead would just push him off the pass.
+      const from: XY = [clamp(pt[0], 2, PITCH_W - 2), clamp(pt[1], 2, PITCH_H - 2)]
+      const on = closestPointOnSegment(from, [ball.x, ball.y], [recv.x, recv.y], MIN_LANE / 2)
+      return [on[0], clamp(on[1] + goalDir * 1, 0, PITCH_H)]
+    }
+    return holdLimits(p, pt)
+  }
+
   let pressing = false
+  /** Phase 1's answer: what each driven player is responsible for. Empty in possession — nothing to defend. */
+  let assign = new Map<string, Assignment>()
+  /** The other way round: opponent -> the defender phase 1 made answerable for him. */
+  const markerOf = new Map<string, string>()
 
   if (!inPossession) {
     // ---- is someone already engaging the ball through an authored job (press / mark / follow the carrier)? ----
@@ -491,6 +687,30 @@ export function computeAiTargets(
       role.set(presser.id, 'presser')
     }
 
+    // ---- PHASE 1: who answers for whom, settled for the team before anybody is positioned ----
+    // Everything below this line is phase 2 — each man finding the best place to stand for the job he has
+    // already been given — and the three points where it used to make a team decision player by player
+    // (who covers the press, who cuts which lane, which opponent to drift towards) now ask the assignment
+    // first. A man nobody else can reach does not get taken off his opponent for a local pull, however
+    // strong: see canReleaseMark.
+    const ballCarrier = foes.find((f) => dist([f.x, f.y], [ball.x, ball.y]) < 2)
+    const duties = new Map<string, string>()
+    for (const p of own) if (p.duty) duties.set(p.id, p.duty.att)
+    const assignWith = (press: string | null, cov: string | null) => {
+      assign = computeAssignments(field, foes, {
+        goalDir, ball: [ball.x, ball.y], slot, carrier: ballCarrier?.id ?? null, presser: press, cover: cov,
+        duty: duties, hold: holdLimits,
+      })
+      markerOf.clear()
+      for (const [id, a] of assign) if (a.type === 'mark' && a.opponent) markerOf.set(a.opponent, id)
+      for (const p of field) {
+        const r = role.get(p.id)
+        if (r === 'presser' || r === 'cover') continue
+        role.set(p.id, assign.get(p.id)?.type === 'mark' ? 'mark' : lineOf.get(p.id) === defIdx ? 'line' : 'wide')
+      }
+    }
+    assignWith(presser?.id ?? null, null)
+
     // ---- cover: ONE player behind the ball-winner (presser, or the authored player on the ball), 5 m goal-side
     //      and 3 m towards the centre. Picked from a deeper line where there is one (so the cover really is
     //      behind the press), and from the zone nearest the ball rather than whichever body happens to be
@@ -503,7 +723,11 @@ export function computeAiTargets(
       const aLine = lineOf.get(anchor.id) ?? 1
       const rank = (p: AiWorldPlayer) => ((lineOf.get(p.id) ?? 1) === aLine ? 1 : 0) // a deeper line first
       const coverPool = field
-        .filter((p) => p.id !== anchor.id && (lineOf.get(p.id) ?? 1) <= aLine)
+        // A man who was given an opponent is only conscripted when somebody else can take that opponent
+        // on: covering the press is worth WORTH.cover, and no more. This is what stops the far-side wide
+        // player — the one body standing anywhere near a free midfielder — being pulled up the pitch to
+        // sit behind a press on the other flank, leaving the man he was the only one who could reach.
+        .filter((p) => p.id !== anchor.id && (lineOf.get(p.id) ?? 1) <= aLine && canReleaseMark(assign.get(p.id), WORTH.cover))
         .sort((a, b) => rank(a) - rank(b) || Math.abs(a.home[0] - ball.x) - Math.abs(b.home[0] - ball.x))
       cover = forcedCover ?? (P.pressBreakers >= 1 ? coverPool[0] : undefined)
       if (cover) {
@@ -514,6 +738,11 @@ export function computeAiTargets(
         target.set(cover.id, [clamp(wanted, slotX - COVER_REACH, slotX + COVER_REACH), clamp(anchor.y + goalDir * 5, 0, PITCH_H)])
         gain.set(cover.id, P.coverGain)
         role.set(cover.id, 'cover')
+        // The handoff has to actually happen. canReleaseMark only establishes that SOMEBODY could take his
+        // man on; until the assignment is run again, that man still has a marker who has walked away from
+        // him, and the stale claim keeps everyone else off him too — abandoned and unavailable at once,
+        // which is worse than never having assigned him.
+        assignWith(presser?.id ?? null, cover.id)
       }
     }
 
@@ -567,17 +796,27 @@ export function computeAiTargets(
         // joining the congestion in the middle — and can still come inside when the middle is all there is.
         const affinity = 1 - Math.abs(mWide - aWide)
         const travel = dist(s, spotOnLane(m, a)) / LANE_REACH
-        return LANE_VALUE.base + LANE_VALUE.affinity * affinity - LANE_VALUE.travel * travel
+        const mine = markerOf.get(a.id) === m.id ? LANE_VALUE.own : 0
+        return LANE_VALUE.base + LANE_VALUE.affinity * affinity + mine - LANE_VALUE.travel * travel
       }
 
       const screeners = field.filter((p) => !pulled.has(p.id) && lineOf.get(p.id) !== defIdx && forced[p.id] !== 'wide')
       const free = foes.filter((a) => a !== carrier && !onJob.has(a.id) && !onTheLine.has(a.id))
+      /**
+       * Cutting the lane to your own man is not leaving him, so it is always allowed; any other lane means
+       * leaving the man you were given, so it has to beat the handoff. Which of two eligible men ends up on
+       * a lane is settled by laneValue below, where answering for the receiver counts for a great deal — a
+       * priority rather than a prohibition, so a marker who cannot reach the pass does not also block the
+       * team-mate who can.
+       */
+      const mayCut = (m: AiWorldPlayer, a: AiWorldPlayer) =>
+        markerOf.get(a.id) === m.id || canReleaseMark(assign.get(m.id), WORTH.screen)
       // Every legal pairing, scored, best first. Taking them in that order spreads the cutters across
       // DIFFERENT lanes: the moment a lane is claimed it is worth nothing to anybody else, so the next man's
       // best remaining option is one nobody has — breadth before depth, and never two on one pass.
       const pairs: { m: AiWorldPlayer; a: AiWorldPlayer; v: number }[] = []
       for (const m of screeners) {
-        for (const a of free) if (canCut(m, a)) pairs.push({ m, a, v: laneValue(m, a) })
+        for (const a of free) if (mayCut(m, a) && canCut(m, a)) pairs.push({ m, a, v: laneValue(m, a) })
       }
       pairs.sort((x, y) => y.v - x.v)
       const busy = new Set<string>()
@@ -611,7 +850,12 @@ export function computeAiTargets(
   {
     const holdsShape = (id: string) => {
       const r = role.get(id)
-      return r === 'line' || r === 'wide' || r === 'screen'
+      return r === 'line' || r === 'wide' || r === 'screen' || r === 'mark'
+    }
+    /** The man phase 1 gave this defender, if it gave him one. */
+    const manOf = (id: string): AiWorldPlayer | null => {
+      const o = assign.get(id)?.opponent
+      return o ? foes.find((f) => f.id === o) ?? null : null
     }
     // a neighbour the AI is not driving (an authored job, say) still anchors from where he actually stands
     const anchorOf = (id: string): XY | null => {
@@ -647,10 +891,23 @@ export function computeAiTargets(
       return clamp(nearestOther / Math.max(d, 1), 0, 1)
     }
     const gravity = (p: AiWorldPlayer): { at: XY; w: number } | null => {
+      const mine = manOf(p.id)
+      if (mine) {
+        // His man, not whoever happens to be nearest. Drifting onto a closer opponent is how two defenders
+        // end up on one and a third attacker is left free — the thing phase 1 exists to settle. The pull
+        // itself is the one the shape always had: phase 1 aims it, it does not amplify it, because this is
+        // a zonal block and a mark is a reason to lean, not a reason to stop keeping the shape. What a mark
+        // nobody else could take adds is weight (W.markBind), so that it holds when the ball pulls the
+        // other way.
+        const d = dist(slot.get(p.id)!, [mine.x, mine.y])
+        const w = W.gravity * Math.max(1 - d / GRAVITY_R, 0) * lerp(1, W.markBind, bindOf(assign.get(p.id)))
+        if (w > 0) return { at: [mine.x, clamp(mine.y + goalDir * GRAVITY_GAP, 0, PITCH_H)], w }
+      }
       const s = slot.get(p.id)!
       let bestAt: XY | null = null
       let bestW = 0
       for (const a of foes) {
+        if (markerOf.has(a.id)) continue // phase 1 gave him to somebody: not this man's business
         const d = dist(s, [a.x, a.y])
         if (d >= GRAVITY_R) continue
         const w = W.gravity * (1 - d / GRAVITY_R) * freedom(p, a, d)
@@ -675,7 +932,10 @@ export function computeAiTargets(
       for (const a of foes) {
         const d = dist(s, [a.x, a.y])
         if (d >= GRAVITY_R || d < 1e-6) continue
-        const covered = 1 - freedom(p, a, d)
+        // A man phase 1 gave to somebody else is covered outright, not covered in proportion to how close
+        // the nearest body happens to be: the job is done and standing beside it adds nothing.
+        const owner = markerOf.get(a.id)
+        const covered = owner && owner !== p.id ? 1 : 1 - freedom(p, a, d)
         if (covered <= 0) continue
         const weight = W.repel * covered * (1 - d / GRAVITY_R)
         ax += ((s[0] - a.x) / d) * weight
@@ -793,7 +1053,9 @@ export function computeAiTargets(
   // ---- no gaps in a line: neighbours stay within their formation spacing (+ slack) ----
   // (the sideways shift moves wide players more than the pinned central ones, which would tear a hole between
   //  them). The allowance never drops below minSep, so closing a gap cannot undo the separation above.
-  const blockPlayers = field.filter((p) => role.get(p.id) === 'line' || role.get(p.id) === 'wide')
+  // A marker is in this too: the offside line pins his depth anyway, and a man answering for an opponent
+  // still owes his line its spacing — leaving him out was letting a hole open where he used to stand.
+  const blockPlayers = field.filter((p) => ['line', 'wide', 'mark'].includes(role.get(p.id)!))
   const lines = new Map<number, AiWorldPlayer[]>()
   for (const p of blockPlayers) {
     const li = lineOf.get(p.id) ?? 1

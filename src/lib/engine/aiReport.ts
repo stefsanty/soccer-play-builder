@@ -71,6 +71,8 @@ export const DOUBLE_MARK_R = 6
  * opponents inside the area the block is actually responsible for are counted as free.
  */
 export const BLOCK_ZONE_R = 20
+/** The roles that mean "holding the block": going to the ball is not, answering for a man is. */
+const SHAPE_HOLDING: string[] = ['line', 'wide', 'screen', 'mark']
 
 export interface AiReport {
   roles: RoleRow[]
@@ -147,12 +149,12 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
             bucket.drift += Math.abs(v.x - home[0])
           }
         }
-        if (['line', 'wide', 'screen'].includes(v.role)) {
+        if (SHAPE_HOLDING.includes(v.role)) {
           for (const n of nb.get(id) ?? []) {
             const q = full[n.id]
             // only between two players who are both holding the shape: the distance to a team-mate who has
             // gone to press the ball is not a stretch in the shape, it is him doing his job
-            if (!q || !['line', 'wide', 'screen'].includes(q.role)) continue
+            if (!q || !SHAPE_HOLDING.includes(q.role)) continue
             const over = Math.hypot(q.x - v.x, q.y - v.y) - (n.d + NEIGHBOUR_SLACK)
             if (over > worstOverstretch) {
               worstOverstretch = over
@@ -165,7 +167,7 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
       // How the opposition is covered: an opponent with two shape-holding defenders on him is one defender
       // wasted, and somewhere else a man is free. Counted per frame over the attacking side's outfielders.
       const holders = Object.entries(full)
-        .filter(([, v]) => ['line', 'wide', 'screen'].includes(v.role))
+        .filter(([, v]) => SHAPE_HOLDING.includes(v.role))
         .map(([, v]) => v)
       // Formation neighbourhood: whoever is actually nearest a player, against whoever the FORMATION puts
       // nearest him. A striker whose closest team-mates have become centre-backs has left his tier, which is
@@ -288,12 +290,19 @@ function phase1(): AiReport['phase1'] {
   const outlets = w.players.filter(
     (p) => p.team === 'ours' && p.id !== 'LCB' && Math.abs(p.x - CENTRE_X) <= 20 && Math.hypot(p.x - carrier.x, p.y - carrier.y) >= 8 && p.y > carrier.y && p.y < carrier.y + 30,
   )
-  const cut = outlets.filter((o) => Object.values(t).some((v) => v.lane === o.id))
+  // An outlet is denied when somebody is ACTUALLY on the pass to it — measured the way the engine measures
+  // it (passingLaneOpen), not by who was handed a `lane`. A man standing on the receiver because he answers
+  // for him blocks that pass exactly as well as a screener sent to shade it, and the point of the figure is
+  // whether the pass is on. A presser or his cover is on his way to the ball, so he is not covering anything.
+  const onPass = (o: AiWorldPlayer) =>
+    Object.entries(t).filter(([, v]) => !['presser', 'cover', 'gk'].includes(v.role)
+      && distPointToSegment([v.x, v.y], [carrier.x, carrier.y], [o.x, o.y]) <= LANE_BLOCK_R)
+  const cut = outlets.filter((o) => onPass(o).length > 0)
   const back = w.players.filter((p) => p.team === 'opp' && !/gk/i.test(p.label) && p.home[1] >= 78).map((p) => t[p.id])
   return {
     outlets: outlets.length,
     cut: cut.length,
-    cutters: Object.entries(t).filter(([, v]) => v.role === 'screen').map(([id]) => id).sort(),
+    cutters: [...new Set(cut.flatMap((o) => onPass(o).map(([id]) => id)))].sort(),
     backLineSpread: Math.max(...back.map((v) => v.y)) - Math.min(...back.map((v) => v.y)),
   }
 }
