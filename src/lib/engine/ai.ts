@@ -969,6 +969,15 @@ export function computeAiTargets(
     // defender could not reach from zone — is still pulled on by gravity, instead of being a nominal
     // assignment the defender ignores because his slot is too far away.
     const markReach = GRAVITY_R + Math.max(0, (P.aggressiveness - 50) / 50) * (MARK_REACH - GRAVITY_R)
+    // Distance-weighted gravity: inverse-square with tiered caps so close opponents exert much stronger pull.
+    const gravWeight = (d: number, maxR: number): number => {
+      if (d >= maxR) return 0
+      if (d < 1) return 5
+      if (d < 3) return 2
+      if (d < 5) return 1
+      return 5 / (d * d)
+    }
+    const DAMPING_CONSTANT = 3.0
     const gravity = (p: AiWorldPlayer): { at: XY; w: number } | null => {
       const mine = manOf(p.id)
       if (mine) {
@@ -979,22 +988,33 @@ export function computeAiTargets(
         // nobody else could take adds is weight (W.markBind), so that it holds when the ball pulls the
         // other way.
         const d = dist(slot.get(p.id)!, [mine.x, mine.y])
-        const w = W.gravity * Math.max(1 - d / markReach, 0) * lerp(1, W.markBind, bindOf(assign.get(p.id)))
+        const w = W.gravity * gravWeight(d, markReach) * lerp(1, W.markBind, bindOf(assign.get(p.id)))
         if (w > 0) return { at: [mine.x, clamp(mine.y + goalDir * GRAVITY_GAP, 0, PITCH_H)], w }
       }
       const s = slot.get(p.id)!
-      let bestAt: XY | null = null
-      let bestW = 0
+      // Collect raw candidates before competing-gravity reduction
+      const candidates: { at: XY; w: number; dBallA: number }[] = []
       for (const a of foes) {
         if (markerOf.has(a.id)) continue // phase 1 gave him to somebody: not this man's business
         const d = dist(s, [a.x, a.y])
-        if (d >= GRAVITY_R) continue
-        const w = W.gravity * (1 - d / GRAVITY_R) * freedom(p, a, d)
-        // the strongest claim wins, so he is drawn to the free man rather than the best-covered one
-        if (w > bestW) {
-          bestW = w
-          bestAt = [a.x, clamp(a.y + goalDir * GRAVITY_GAP, 0, PITCH_H)]
+        const w = W.gravity * gravWeight(d, GRAVITY_R) * freedom(p, a, d)
+        if (w <= 0) continue
+        candidates.push({ at: [a.x, clamp(a.y + goalDir * GRAVITY_GAP, 0, PITCH_H)], w, dBallA: dist([a.x, a.y], [ball.x, ball.y]) })
+      }
+      // Competing gravity: the primary attractor wins; dampen secondary opponents within 5 m of the ball
+      if (candidates.length > 1) {
+        const primaryW = Math.max(...candidates.map((c) => c.w))
+        for (const c of candidates) {
+          if (c.w < primaryW && c.dBallA < 5) {
+            c.w *= 1 / (1 + primaryW / DAMPING_CONSTANT)
+          }
         }
+      }
+      // The strongest claim wins, so he is drawn to the free man rather than the best-covered one
+      let bestAt: XY | null = null
+      let bestW = 0
+      for (const c of candidates) {
+        if (c.w > bestW) { bestW = c.w; bestAt = c.at }
       }
       return bestAt ? { at: bestAt, w: bestW } : null
     }
