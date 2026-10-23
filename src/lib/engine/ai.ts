@@ -115,6 +115,8 @@ export const LANE_REACH = 18
 export const NEIGHBOUR_SLACK = 5
 /** How many formation neighbours each player is tied to. */
 const NEIGHBOURS = 2
+/** The least depth between one formation line and the next, so a compressing block never interleaves. */
+export const LINE_MIN_GAP = 7
 /** A slot nearer the middle than this is a central one, and is held there. */
 const CENTRAL_OFF = 10
 /** A slot this far off centre is a flank slot: its job is the wide outlet, so it holds its lateral position.
@@ -143,7 +145,7 @@ const REPEL_STEP = 10
  * `ballPress` multiplies the ball pull while a hard press is on: the block squeezes as a unit instead of
  * sending a second chaser after the carrier.
  */
-export const W = { slot: 1, ball: 2.5, gravity: 2.8, repel: 0.5, neighbour: 0.9, ballPress: 1.6 } as const
+export const W = { slot: 1, ball: 2.5, gravity: 2.8, repel: 0.5, neighbour: 0.9, displace: 3.0, ballPress: 1.6 } as const
 /** How many times the weighed pulls are re-solved; neighbours move, so it settles rather than resolving once. */
 const SOLVE_PASSES = 4
 
@@ -357,14 +359,11 @@ export function computeAiTargets(
   // formation puts them. Taken from the shape, so it does not drift as players are pulled about in play.
   const neighbours = new Map<string, { id: string; d: number }[]>()
   for (const p of outfield) {
-    neighbours.set(
-      p.id,
-      outfield
-        .filter((q) => q.id !== p.id)
-        .map((q) => ({ id: q.id, d: dist(p.home, q.home) }))
-        .sort((a, b) => a.d - b.d)
-        .slice(0, NEIGHBOURS),
-    )
+    const byHome = outfield
+      .filter((q) => q.id !== p.id)
+      .map((q) => ({ id: q.id, d: dist(p.home, q.home) }))
+      .sort((a, b) => a.d - b.d)
+    neighbours.set(p.id, byHome.slice(0, NEIGHBOURS))
   }
 
   const lineD = blendedLineDepth(dBall, P, inPossession)
@@ -377,7 +376,7 @@ export function computeAiTargets(
   // Depth comes from the line height; sideways it is simply his formation x. Nothing about the ball or the
   // opposition is baked in here — every reason to stand somewhere else is a pull weighed against this one
   // in solveShape below.
-  const slot = new Map<string, XY>()
+  const rawDepth = new Map<string, number>()
   for (const p of field) {
     const line = lineOf.get(p.id) ?? 1
     let depth: number
@@ -387,7 +386,34 @@ export function computeAiTargets(
       depth = lineD + (homeDepth.get(p.id)! - defHome) * P.compact
       if (!inPossession) depth = Math.min(depth, dBall - 1)
     }
-    depth = Math.min(Math.max(2, depth), PITCH_H - 25) // never into the keeper's area from the other end either
+    rawDepth.set(p.id, Math.min(Math.max(2, depth), PITCH_H - 25)) // never into the keeper's area either
+  }
+
+  // ---- the lines keep their formation order ----
+  // Every line above the back one is held behind the ball, so as the ball comes in they all converge on one
+  // depth and the formation stops being a formation: with the ball 16 m out the forwards sat BETWEEN the
+  // centre-backs and the midfield. A striker whose nearest team-mates are two centre-backs has no shape left
+  // to keep, and no pull towards his own slot can mend it, because his slot is where the trouble is. So the
+  // lines are pushed apart far enough to stay in order — upfield, leaving the back line and the offside
+  // height it carries exactly where they were.
+  const lineLift = new Map<number, number>()
+  {
+    const mean = new Map<number, number>()
+    for (const li of new Set(field.map((p) => lineOf.get(p.id) ?? 1))) {
+      const members = field.filter((p) => (lineOf.get(p.id) ?? 1) === li)
+      mean.set(li, members.reduce((s, p) => s + rawDepth.get(p.id)!, 0) / members.length)
+    }
+    let behind = -Infinity
+    for (const li of [...mean.keys()].sort((a, b) => a - b)) {
+      const want = Math.max(mean.get(li)!, behind + LINE_MIN_GAP)
+      lineLift.set(li, want - mean.get(li)!)
+      behind = want
+    }
+  }
+
+  const slot = new Map<string, XY>()
+  for (const p of field) {
+    const depth = clamp(rawDepth.get(p.id)! + (lineLift.get(lineOf.get(p.id) ?? 1) ?? 0), 2, PITCH_H - 25)
     slot.set(p.id, [clamp(p.home[0], xLo, xHi), yOf(depth)])
   }
 

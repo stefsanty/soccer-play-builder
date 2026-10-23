@@ -457,24 +457,10 @@ function auditLanes(w: AiWorld, team: 'ours' | 'opp', cfg: Parameters<typeof com
       `${c.id} is not on the lane it was given`,
     ).toBeLessThanOrEqual(LANE_BLOCK_R)
   }
-  // The assignment is settled: no two cutters who COULD trade lanes would both rather do so. A trade the rule
-  // forbids is not a defect, so the two stated limits — cut inside your own band, hold your own flank — are
-  // applied here too before a pair is judged.
-  const depth = (y: number) => (team === 'opp' ? 105 - y : y)
-  const canTake = (home: XY, recv: { x: number; y: number }) => {
-    const lo = Math.min(depth(ball.y), depth(home[1]))
-    const hi = Math.max(depth(ball.y), depth(home[1]))
-    if (depth(recv.y) <= lo || depth(recv.y) >= hi) return false
-    return Math.abs(home[0] - 34) < 10 || Math.abs(recv.x - home[0]) <= WIDE_LANE_REACH
-  }
-  for (const a of cut) {
-    for (const b of cut) {
-      if (a.id >= b.id) continue
-      if (!canTake(a.home, b.recv) || !canTake(b.home, a.recv)) continue
-      const better = gap(a.home, b.recv) < gap(a.home, a.recv) - 1e-9 && gap(b.home, a.recv) < gap(b.home, b.recv) - 1e-9
-      expect(better, `${a.id} and ${b.id} would both rather swap lanes`).toBe(false)
-    }
-  }
+  // (A swap-stability check lived here. It compared two cutters by which lane was NEARER, and lanes are no
+  // longer handed out by distance — laneValue weighs a slot's width against the travel — so it was asserting
+  // against an objective the code had stopped having. Exclusivity, the part that mattered, is covered by the
+  // lane-value tests below.)
   return { t, cut }
 }
 
