@@ -48,3 +48,6 @@ next-env.d.ts
 
 # supabase CLI local state
 supabase/.temp/
+
+# claude code local state
+.claude/

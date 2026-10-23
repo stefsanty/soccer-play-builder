@@ -15,6 +15,7 @@ export function EditorShell({ play }: { play: Play }) {
       play,
       currentStepIndex: 0,
       mode: 'select',
+      bottomMode: 'play',
       selectedPlayerId: null,
       isDirty: false,
       isPlaying: false,

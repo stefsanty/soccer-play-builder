@@ -10,10 +10,20 @@ export type EditorMode =
   | 'run'           // click source then target to draw run arrow
   | 'preview'       // animation playback mode
 
+/**
+ * What the editor's bottom panel is for right now. 'play' is the default — a full-play timeline and a
+ * Play-all button, so somebody landing on the page can watch what the play does. 'edit' is the authoring
+ * UI (step chips, runs bar, behaviour); from there a 'back to play' button returns to 'play'. Orthogonal
+ * to `mode` (which is the pitch's interaction mode); `mode === 'preview'` still takes over the whole
+ * pitch and overrides the bottom panel either way.
+ */
+export type BottomMode = 'play' | 'edit'
+
 interface EditorState {
   play: Play | null
   currentStepIndex: number
   mode: EditorMode
+  bottomMode: BottomMode
   selectedPlayerId: string | null
   isDirty: boolean
   isPlaying: boolean
@@ -23,6 +33,7 @@ interface EditorState {
   // Actions
   setPlay: (play: Play) => void
   setMode: (mode: EditorMode) => void
+  setBottomMode: (mode: BottomMode) => void
   selectPlayer: (id: string | null) => void
   setCurrentStep: (index: number) => void
   addStep: () => void
@@ -50,6 +61,7 @@ export const useEditorStore = create<EditorState>()(
     play: null,
     currentStepIndex: 0,
     mode: 'select',
+    bottomMode: 'play',
     selectedPlayerId: null,
     isDirty: false,
     isPlaying: false,
@@ -89,6 +101,7 @@ export const useEditorStore = create<EditorState>()(
       }
     }),
     setMode: (mode) => set((s) => { s.mode = mode }),
+    setBottomMode: (bottomMode) => set((s) => { s.bottomMode = bottomMode }),
     selectPlayer: (id) => set((s) => { s.selectedPlayerId = id }),
     setCurrentStep: (index) => set((s) => { s.currentStepIndex = index; s.isPlaying = false; s.previewTime = 0 }),
     addStep: () => set((s) => {

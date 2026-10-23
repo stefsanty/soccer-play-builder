@@ -16,12 +16,13 @@ import { BehaviorPanel } from './BehaviorPanel'
 import { RunsBar, RunsList } from './RunsPanel'
 import { FormationGhosts, FormationToggle } from './Formation'
 import { AnimatedPitch } from './AnimatedPitch'
+import { PlayModeBar, SETUP_COUNT } from './PlayModeBar'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import type { Play } from '@/lib/types/play'
 import { ballHolderAfter, stepChain } from '@/lib/engine/ballHolder'
 import { BALL_OFFSET, getTimeline } from '@/lib/engine/simulator'
 import { haptic } from '@/lib/haptics'
-import { Check, CircleDot, Move, MoveUpRight, Pencil, X, Zap } from 'lucide-react'
+import { ArrowLeft, Check, CircleDot, Move, MoveUpRight, Pencil, X, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 interface PitchEditorProps {
@@ -58,10 +59,12 @@ function positionsAt(play: Play, stepIndex: number): Map<string, Pos> {
 export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {}) {
   const play = useEditorStore((s) => s.play)
   const mode = useEditorStore((s) => s.mode)
+  const bottomMode = useEditorStore((s) => s.bottomMode)
   const currentStepIndex = useEditorStore((s) => s.currentStepIndex)
   const selectedPlayerId = useEditorStore((s) => s.selectedPlayerId)
   const setPlay = useEditorStore((s) => s.setPlay)
   const setMode = useEditorStore((s) => s.setMode)
+  const setBottomMode = useEditorStore((s) => s.setBottomMode)
   const selectPlayer = useEditorStore((s) => s.selectPlayer)
   const setCurrentStep = useEditorStore((s) => s.setCurrentStep)
   const addStep = useEditorStore((s) => s.addStep)
@@ -479,32 +482,55 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           body={runsOpen && step.moves.length > 0 ? <RunsList moves={step.moves} labelOf={labelOf} onToggle={(id) => toggleMoveHidden(id, currentStepIndex)} /> : undefined}
         />
       )}
-      {mode !== 'preview' && !behaviorOpen && (
+      {mode !== 'preview' && !behaviorOpen && bottomMode === 'play' && (
+        <PlayModeBar onEnterEdit={() => { haptic(10); setBottomMode('edit') }} />
+      )}
+      {mode !== 'preview' && !behaviorOpen && bottomMode === 'edit' && (
         <>
-          <div className="shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2" data-testid="step-bar" style={{ height: STRIP_HEIGHT }}>
-            <div className="flex items-center gap-1.5 overflow-x-auto" role="group" aria-label="Steps">
-              {play?.steps.map((st, i) => (
-                <button
-                  key={st.id}
-                  type="button"
-                  data-testid={`step-chip-${i}`}
-                  aria-label={i === 0 ? 'Setup step' : `Step ${st.isAltBranch ? (st.altLabel ?? i) : i}`}
-                  aria-current={i === currentStepIndex ? 'step' : undefined}
-                  onClick={() => goToStep(i)}
-                  className={`h-9 shrink-0 touch-manipulation select-none rounded-full px-2.5 text-[13px] font-bold transition-all duration-100 active:scale-90 ${
-                    i === 0 ? 'min-w-14' : 'min-w-9'
-                  } ${
-                    i === currentStepIndex ? 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]' : 'bg-[var(--app-chip)] text-[#e8edf2]'
-                  } ${st.isAltBranch ? 'border border-dashed border-[#4cc9f0]' : ''}`}
-                >
-                  {i === 0 ? 'Setup' : st.isAltBranch ? (st.altLabel ?? i) : i}
-                </button>
-              ))}
+          <div className="relative shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2" data-testid="step-bar" style={{ height: STRIP_HEIGHT }}>
+            <div className="flex items-center gap-1.5 overflow-x-auto pl-[72px]" role="group" aria-label="Steps">
+              {play?.steps.map((st, i) => {
+                const setup = i < SETUP_COUNT
+                return (
+                  <button
+                    key={st.id}
+                    type="button"
+                    data-testid={`step-chip-${i}`}
+                    aria-label={setup ? `Setup — ${st.title}` : `Step ${st.isAltBranch ? (st.altLabel ?? i) : i}`}
+                    aria-current={i === currentStepIndex ? 'step' : undefined}
+                    onClick={() => goToStep(i)}
+                    className={`h-9 shrink-0 touch-manipulation select-none rounded-full px-2.5 text-[13px] font-bold transition-all duration-100 active:scale-90 ${
+                      i === 0 ? 'min-w-14' : 'min-w-9'
+                    } ${
+                      i === currentStepIndex
+                        ? setup
+                          ? 'bg-white/15 text-[#e8edf2] ring-2 ring-[var(--app-accent)]'
+                          : 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]'
+                        : setup
+                          ? 'bg-white/5 text-[var(--app-muted)]'
+                          : 'bg-[var(--app-chip)] text-[#e8edf2]'
+                    } ${st.isAltBranch ? 'border border-dashed border-[#4cc9f0]' : ''}`}
+                  >
+                    {i === 0 ? 'Setup' : st.isAltBranch ? (st.altLabel ?? i) : i}
+                  </button>
+                )
+              })}
               <button type="button" aria-label="Add Step" onClick={handleAddStep}
                 className="h-9 min-w-9 shrink-0 touch-manipulation select-none rounded-full border border-[#34455a] px-2 text-lg leading-none text-[var(--app-muted)] transition-all duration-100 hover:border-[var(--app-accent)] hover:text-[var(--app-accent)] active:scale-90 active:bg-white/10">
                 +
               </button>
             </div>
+            {/* Back to Play Mode: pinned top-left so authors can hop back out of the editing UI from any step. */}
+            <button
+              type="button"
+              data-testid="back-to-play"
+              aria-label="Back to Play mode"
+              onClick={() => { haptic(10); setBottomMode('play') }}
+              className="absolute left-2 top-2 flex h-7 touch-manipulation items-center gap-1 rounded-full border border-white/10 bg-[rgba(11,16,21,0.9)] px-2.5 text-[11px] font-semibold text-[#cbd5e1] shadow-sm backdrop-blur transition-all duration-100 hover:border-white/25 hover:bg-[rgba(11,16,21,0.95)] active:scale-95"
+            >
+              <ArrowLeft className="size-3.5" aria-hidden />
+              Play
+            </button>
           </div>
           {step && (
             <RunsBar
