@@ -251,7 +251,7 @@ const FORKED_PLAYERS: [string, 'ours' | 'opp', number, number][] = [
 
 const blank = (index: number, title: string, duration: number): PlayStep => ({
   id: `s${index}`, index, title, duration,
-  narrativeOurs: [], narrativeOpp: [], moves: [], passes: [], defenderRules: {}, faceTargets: [],
+  moves: [], passes: [], defenderRules: {}, faceTargets: [],
 })
 
 /** The three steps the report is about: the setup, the recycle that settles the block, then the wide pass. */

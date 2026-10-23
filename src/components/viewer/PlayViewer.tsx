@@ -21,8 +21,6 @@ export function PlayViewer({ play }: { play: Play }) {
     play.authorName ? `Shared by ${play.authorName}.` : 'Shared play.',
     `${mainSteps} step${mainSteps === 1 ? '' : 's'}${options ? `, ${options} option${options === 1 ? '' : 's'}` : ''}.`,
   ].join(' ')
-  const detail = step?.narrativeOurs.join(' ')
-
   return (
     <div
       data-testid="play-viewer"
@@ -53,8 +51,7 @@ export function PlayViewer({ play }: { play: Play }) {
         <section className="flex min-w-0 flex-col gap-3 sm:flex-[999_1_560px]">
           {step && <div className="text-[17px] font-semibold leading-[1.3]">{step.title}</div>}
           <AnimatedPitch play={play} stepIndex={stepIndex} onStepChange={setStepIndex} />
-          {detail && <div className="text-[15px] leading-[1.3]">{detail}</div>}
-          <div className="text-[13px] text-[var(--app-muted)]">Tap a step to play it.</div>
+<div className="text-[13px] text-[var(--app-muted)]">Tap a step to play it.</div>
         </section>
 
         <aside data-testid="viewer-sidebar" className="flex min-w-0 flex-col gap-2.5 sm:flex-[1_1_300px]">

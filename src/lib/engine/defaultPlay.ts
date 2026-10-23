@@ -26,8 +26,6 @@ export function createDefaultPlay(): Play {
     index: 0,
     title: 'Step 1',
     duration: 4,
-    narrativeOurs: [],
-    narrativeOpp: [],
     moves: [],
     passes: [],
     defenderRules: {},

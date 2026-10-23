@@ -150,9 +150,7 @@ export interface PlayStep {
   index: number
   title: string
   duration: number    // seconds
-  narrativeOurs: string[]    // bullet points for "our team"
-  narrativeOpp: string[]     // bullet points for "opponent"
-  moves: PlayerMove[]
+moves: PlayerMove[]
   passes: PassAnimation[]
   defenderRules: Record<string, DefenderRule[]>  // oppPlayerId -> rules
   faceTargets: FaceTarget[]

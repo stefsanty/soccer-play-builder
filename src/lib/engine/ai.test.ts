@@ -867,7 +867,7 @@ describe('follow: handoff inside the simulation', () => {
   function scenario(handoff: 'auto' | 'none' | string = 'auto'): Play {
     const step: PlayStep = {
       id: 's0', index: 0, title: 'follow', duration: 5,
-      narrativeOurs: [], narrativeOpp: [], passes: [], faceTargets: [],
+      passes: [], faceTargets: [],
       // the attacker runs out of d1's area (x > 42 is out by more than the 2 m margin)
       moves: [{ playerId: 'a1', toX: 62, toY: 52, startTime: 0.5, endTime: 2.5 }],
       defenderRules: { d1: [fl('a1', [30, 58], bounds, 0, { handoff })] },

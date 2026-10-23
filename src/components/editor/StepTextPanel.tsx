@@ -15,12 +15,10 @@ interface StepTextPanelProps {
   title: string
   /** e.g. "Step 5 of 5" */
   stepLabel?: ReactNode
-  ours: string[]
-  opp: string[]
   body?: ReactNode
 }
 
-export function StepTextPanel({ badge, title, stepLabel, ours, opp, body }: StepTextPanelProps) {
+export function StepTextPanel({ badge, title, stepLabel, body }: StepTextPanelProps) {
   return (
     <section
       data-testid="step-text-panel"
@@ -38,20 +36,7 @@ export function StepTextPanel({ badge, title, stepLabel, ours, opp, body }: Step
         {stepLabel && <span className="mt-1 shrink-0 text-xs text-[var(--app-muted)]">{stepLabel}</span>}
       </div>
       <div data-testid="step-text" className="mt-1.5 min-h-0 flex-1 overflow-y-auto pb-2 text-[13px] leading-[1.4]">
-        {body ?? (
-          <>
-            {ours.length === 0 && opp.length === 0 && <p className="m-0 text-[var(--app-muted)]">No notes for this step.</p>}
-            {ours.map((line, i) => (
-              <p key={`o${i}`} className="m-0 mb-1 text-[#cbd5e1]">{line}</p>
-            ))}
-            {opp.map((line, i) => (
-              <p key={`p${i}`} className="m-0 mb-1 text-[#ff9aa0]">
-                <span className="font-semibold">Opponent: </span>
-                {line}
-              </p>
-            ))}
-          </>
-        )}
+        {body}
       </div>
     </section>
   )

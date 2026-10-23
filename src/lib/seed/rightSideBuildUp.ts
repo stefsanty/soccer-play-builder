@@ -41,8 +41,8 @@ type RawOptions = { pairs: [string, string][]; labels?: { t: string; a: 'start' 
 interface RawStep {
   title: string
   D: number
-  text: string[]
-  opp: string[]
+  text?: string[]
+  opp?: string[]
   moves: Record<string, [number, number, number, number, number?, Pt?]>
   passes: { from: string; to: string; t0: number; t1: number; lob?: boolean }[]
   rules: Record<string, RawRule | RawRule[]>
@@ -263,8 +263,6 @@ function convertStep(raw: RawStep, index: number): PlayStep {
     index,
     title: raw.title,
     duration: raw.D,
-    narrativeOurs: raw.text,
-    narrativeOpp: raw.opp,
     moves,
     passes,
     defenderRules,

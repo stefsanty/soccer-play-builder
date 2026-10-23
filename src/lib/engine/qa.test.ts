@@ -25,7 +25,7 @@ function custom(players: Play['players'], steps: Partial<PlayStep>[]): Play {
   return {
     ...seeded(), id: 'c', players,
     steps: steps.map((s, i) => ({
-      id: `s${i}`, index: i, title: 't', duration: 6, narrativeOurs: [], narrativeOpp: [], moves: [], passes: [], defenderRules: {}, faceTargets: [], ...s,
+      id: `s${i}`, index: i, title: 't', duration: 6, moves: [], passes: [], defenderRules: {}, faceTargets: [], ...s,
     })) as PlayStep[],
   }
 }

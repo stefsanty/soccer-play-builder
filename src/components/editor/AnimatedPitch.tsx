@@ -426,8 +426,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
             badge={step.isAltBranch ? (step.altLabel ?? stepIndex) : stepIndex}
             title={step.title}
             stepLabel={<span data-testid="anim-step-indicator" className="tabular-nums">Step {stepIndex + 1} of {total}</span>}
-            ours={step.narrativeOurs}
-            opp={step.narrativeOpp}
+
           />
         )}
         {!hideStepBar && stepBar}

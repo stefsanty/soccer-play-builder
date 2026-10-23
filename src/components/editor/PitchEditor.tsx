@@ -500,8 +500,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           badge={isSetupStep ? 'S' : (step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex)}
           title={step.title}
           stepLabel={isSetupStep ? 'Starting positions' : `Step ${currentStepIndex + 1} of ${play?.steps.length ?? 1}`}
-          ours={step.narrativeOurs}
-          opp={step.narrativeOpp}
+
           body={runsOpen && step.moves.length > 0 ? <RunsList moves={step.moves} labelOf={labelOf} onToggle={(id) => toggleMoveHidden(id, currentStepIndex)} /> : undefined}
         />
       )}

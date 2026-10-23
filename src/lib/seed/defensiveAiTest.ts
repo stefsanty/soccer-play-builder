@@ -21,7 +21,6 @@ function step(
   index: number,
   title: string,
   duration: number,
-  text: string[],
   passes: Pass[],
   extra: Partial<PlayStep> = {},
 ): PlayStep {
@@ -30,8 +29,6 @@ function step(
     index,
     title,
     duration,
-    narrativeOurs: text,
-    narrativeOpp: [],
     moves: [],
     passes: passes.map(([from, to, startTime, endTime]) => ({ from, to, startTime, endTime })),
     defenderRules: {},
@@ -54,39 +51,19 @@ export function toPlayInsert(): PlayInsert {
     meta: { formation: 'custom', viewSide: 'full', tags: ['defensive-ai'], isPublic: true },
     players,
     steps: [
-      step(0, 'Ball recycled at the back: GK to CB to CB', 5, [
-        'OPP has Defense AI on mid intensity.',
-        'Ball is recycled between GK and CBs.',
-        'Watch how the OPP block stays compact and adjusts to ball side.',
-      ], [['GK', 'LCB', 0.5, 1.8], ['LCB', 'RCB', 2.2, 3.5]]),
+      step(0, 'Ball recycled at the back: GK to CB to CB', 5, [['GK', 'LCB', 0.5, 1.8], ['LCB', 'RCB', 2.2, 3.5]]),
 
-      step(1, 'Wide pass: RB to LW, who is wide open', 5, [
-        'RB finds LW making a wide run.',
-        'The nearest OPP defender (oRB, the full-back on LW’s flank) presses while the block shifts.',
-      ], [['RCB', 'RB', 0.2, 1.4], ['RB', 'LW', 1.8, 3.5]], { defenderRules: { oRB: [pr('LW', 1.8)] } }),
+      step(1, 'Wide pass: RB to LW, who is wide open', 5, [['RCB', 'RB', 0.2, 1.4], ['RB', 'LW', 1.8, 3.5]], { defenderRules: { oRB: [pr('LW', 1.8)] } }),
 
-      step(2, 'Ball to CAM in front of the box', 6, [
-        'CM plays to CAM who is in a dangerous central position.',
-        'The ball is deep in the OPP half: the block drops and the nearest defenders close CAM down.',
-        'Watch the OPP block collapse and pack the central area.',
-      ], [['RCB', 'CM', 0.3, 1.6], ['CM', 'CAM', 2.2, 3.4]], {
+      step(2, 'Ball to CAM in front of the box', 6, [['RCB', 'CM', 0.3, 1.6], ['CM', 'CAM', 2.2, 3.4]], {
         moves: [{ playerId: 'CAM', toX: 34, toY: 72, startTime: 0, endTime: 1.2 }],
         defenderRules: { oCMR: [pr('CAM', 2.4, 0.5)] },
       }),
 
-      step(3, 'Full build-up through all thirds', 7, [
-        'Watch the OPP block progressively drop deeper as the ball advances.',
-        'Each line drops behind the ball as it moves forward.',
-        'Near the box, two OPP defenders press ST.',
-      ], [['GK', 'LCB', 0.3, 1.4], ['LCB', 'CM', 2.0, 3.2], ['CM', 'CAM', 3.8, 4.9], ['CAM', 'ST', 5.5, 6.5]]),
+      step(3, 'Full build-up through all thirds', 7, [['GK', 'LCB', 0.3, 1.4], ['LCB', 'CM', 2.0, 3.2], ['CM', 'CAM', 3.8, 4.9], ['CAM', 'ST', 5.5, 6.5]]),
 
       // OPP have the ball and recycle it at the back while OURS rearrange: ST drops, LW runs into his place, CM covers.
-      step(4, 'Ball at the back: ST drops, LW runs into the striker zone', 8, [
-        'ST drops to midfield to create space. LW makes a diagonal run into the striker zone.',
-        'oCAM follows ST into midfield (follow rule with zone boundary).',
-        'Watch: does the OPP defensive shape adapt? Does a new player pick up LW in the striker zone?',
-        'When ball is recycled at back, do the OPP lines stay high enough or do they drop unnecessarily?',
-      ], [['oRCB', 'oGK', 0.5, 1.6], ['oGK', 'oLCB', 2.2, 3.2]], {
+      step(4, 'Ball at the back: ST drops, LW runs into the striker zone', 8, [['oRCB', 'oGK', 0.5, 1.6], ['oGK', 'oLCB', 2.2, 3.2]], {
         moves: [
           { playerId: 'ST', toX: 34, toY: 55, startTime: 0.3, endTime: 3.3 },
           { playerId: 'LW', toX: 28, toY: 78, startTime: 0.5, endTime: 3.5 },
