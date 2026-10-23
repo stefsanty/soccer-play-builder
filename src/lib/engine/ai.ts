@@ -362,7 +362,26 @@ export interface AssignmentConfig {
    * having "somebody on him" is what stops anyone else going.
    */
   hold?: (d: AiWorldPlayer, at: XY) => XY
+  /**
+   * 0-100 (default 50). What tilts the orchestrator from zonal to man-marking. At 50 the ambient ring
+   * (GRAVITY_R) decides who is a candidate for a mark; above it the ring widens linearly, so spare
+   * defenders pick up men they would otherwise shadow from zone — up the pitch and onto their shoulder,
+   * not standing behind the block waiting. Marks are only ADDED by this, never released, so coverage
+   * cannot drop. Below 50 the pass is skipped and the block holds shape.
+   */
+  aggressiveness?: number
 }
+
+/**
+ * At aggressiveness `a`, how far from his slot a spare defender will go to pick up an unmarked man.
+ * At 50 it is the ambient ring (GRAVITY_R, 15 m); each step above adds half a metre, so at 100 it is
+ * 40 m — a full back-line shuffle will track an advanced striker. Below 50 the ring does not widen.
+ */
+export const pickupReach = (aggressiveness: number) =>
+  GRAVITY_R + Math.max(0, (aggressiveness - 50) / 2)
+
+/** How far from his slot an assignment can still pull a defender in solveShape (see mark gravity). */
+export const MARK_REACH = 22
 
 /**
  * PHASE 1 — who answers for whom, decided for the team as a whole before anybody is told where to stand.
@@ -449,6 +468,60 @@ export function computeAssignments(
     if (!best) continue
     taken.add(best.d.id)
     marks.push({ d: best.d, a })
+  }
+
+  // ---- mark-switch: swap pairs of marks that are cheaper the other way round ----
+  // The greedy picks most-dangerous first and takes IT its cheapest defender. When one defender fits
+  // one man best in isolation and another fits his partner best, the order of iteration can send them
+  // to each other's man instead; the greedy keeps the suboptimal pairing because it never looks back.
+  // 2-opt catches it: a pair is swapped iff the sum of the two costs drops. Coverage never drops —
+  // every man a defender held before the swap is still held by somebody after — so the safety gate
+  // (never leave a man without a marker) is satisfied by construction.
+  for (let guard = marks.length * marks.length; guard >= 0; guard--) {
+    let improved = false
+    for (let i = 0; i < marks.length && !improved; i++) {
+      for (let j = i + 1; j < marks.length && !improved; j++) {
+        const m1 = marks[i]
+        const m2 = marks[j]
+        const before = cost(m1.d, m1.a) + cost(m2.d, m2.a)
+        const after = cost(m1.d, m2.a) + cost(m2.d, m1.a)
+        if (after < before - 1e-6) {
+          marks[i] = { d: m1.d, a: m2.a }
+          marks[j] = { d: m2.d, a: m1.a }
+          improved = true
+        }
+      }
+    }
+    if (!improved) break
+  }
+
+  // ---- aggressive pickup: at mildly aggressive and above, free defenders take any man they can reach ----
+  // The greedy only looks for opponents within the ambient ring (GRAVITY_R) of a defender's slot: a
+  // zonal block, man-marking the men it has stepped onto. Higher aggressiveness widens that ring (see
+  // pickupReach), so a spare defender picks up a man he can still get to within MARK_MAX instead of
+  // shadowing him from zone. Coverage only grows — no mark is released by this pass, so the safety
+  // gate is implicit; the pickup itself is the handoff. Processed most-threatening first for the same
+  // reason the greedy was: a defender spent on a cheaper match leaves the more dangerous man open.
+  const aggressiveness = clamp(config.aggressiveness ?? 50, 0, 100)
+  if (aggressiveness > 50) {
+    const reach = pickupReach(aggressiveness)
+    const already = new Set(marks.map((m) => m.a.id))
+    const extra = opponents.filter(
+      (a) => !isGk(a) && a.id !== carrier && !spokenFor.has(a.id) && !already.has(a.id)
+        && available.some((d) => !taken.has(d.id) && dist(slotOf(d), [a.x, a.y]) < reach),
+    ).sort((a, b) => depthOf(a.y) - depthOf(b.y))
+    for (const a of extra) {
+      let best: { d: AiWorldPlayer; c: number } | null = null
+      for (const d of available) {
+        if (taken.has(d.id)) continue
+        const c = cost(d, a)
+        if (c > MARK_MAX) continue
+        if (!best || c < best.c) best = { d, c }
+      }
+      if (!best) continue
+      taken.add(best.d.id)
+      marks.push({ d: best.d, a })
+    }
   }
 
   // Whoever was given nobody: the back line's standing job is the line itself, so it holds its zone;
@@ -699,7 +772,7 @@ export function computeAiTargets(
     const assignWith = (press: string | null, cov: string | null) => {
       assign = computeAssignments(field, foes, {
         goalDir, ball: [ball.x, ball.y], slot, carrier: ballCarrier?.id ?? null, presser: press, cover: cov,
-        duty: duties, hold: holdLimits,
+        duty: duties, hold: holdLimits, aggressiveness: P.aggressiveness,
       })
       markerOf.clear()
       for (const [id, a] of assign) if (a.type === 'mark' && a.opponent) markerOf.set(a.opponent, id)
@@ -890,6 +963,12 @@ export function computeAiTargets(
       const nearestOther = Math.min(Infinity, ...coverers.filter((q) => q.id !== p.id).map((q) => dist([q.x, q.y], [a.x, a.y])))
       return clamp(nearestOther / Math.max(d, 1), 0, 1)
     }
+    // How far from his slot an assigned mark still pulls a defender. At the default (aggressiveness 50)
+    // it is the ambient ring, so an existing mark is pulled on exactly as before. Over 50 the reach
+    // widens linearly toward MARK_REACH, so a far pickup — the aggressive-pickup pass picks up a man a
+    // defender could not reach from zone — is still pulled on by gravity, instead of being a nominal
+    // assignment the defender ignores because his slot is too far away.
+    const markReach = GRAVITY_R + Math.max(0, (P.aggressiveness - 50) / 50) * (MARK_REACH - GRAVITY_R)
     const gravity = (p: AiWorldPlayer): { at: XY; w: number } | null => {
       const mine = manOf(p.id)
       if (mine) {
@@ -900,7 +979,7 @@ export function computeAiTargets(
         // nobody else could take adds is weight (W.markBind), so that it holds when the ball pulls the
         // other way.
         const d = dist(slot.get(p.id)!, [mine.x, mine.y])
-        const w = W.gravity * Math.max(1 - d / GRAVITY_R, 0) * lerp(1, W.markBind, bindOf(assign.get(p.id)))
+        const w = W.gravity * Math.max(1 - d / markReach, 0) * lerp(1, W.markBind, bindOf(assign.get(p.id)))
         if (w > 0) return { at: [mine.x, clamp(mine.y + goalDir * GRAVITY_GAP, 0, PITCH_H)], w }
       }
       const s = slot.get(p.id)!

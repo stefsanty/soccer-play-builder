@@ -129,6 +129,76 @@ describe('computeAssignments: the handoff cost on a mark', () => {
   })
 })
 
+describe('computeAssignments: mark-switching between pairs (2-opt swap)', () => {
+  // Greedy picks the most dangerous man first, then his cheapest defender. When one defender is best
+  // for A and another is best for B but the order of iteration sent them to each other's man, the
+  // greedy never looks back; a swap halves the total cost and nobody loses coverage.
+  it('swaps a pair of marks when the swap halves the total mark cost', () => {
+    // d1 sits between a1 and a2; d2 sits outside, only reaching a2. Greedy processes a2 first (deeper
+    // vs the defended goal at y=105) and takes d1 because it is the cheapest for a2, which leaves d2
+    // forced onto a1 at a long chase. 2-opt should see that d1 ↔ d2 cuts the sum.
+    const defenders = [P('d1', 'opp', [34, 78], [34, 80]), P('d2', 'opp', [34, 60], [34, 60])]
+    const opponents = [P('a1', 'ours', [34, 55]), P('a2', 'ours', [34, 73])] // a2 is more threatening (deeper)
+    const got = computeAssignments(defenders, opponents, defendingTop([34, 20]))
+    // The right pairing is d1 → a2 (close), d2 → a1 (close), not d1 → a2 d2 → a1 at long reach.
+    expect(got.get('d1')).toMatchObject({ type: 'mark', opponent: 'a2' })
+    expect(got.get('d2')).toMatchObject({ type: 'mark', opponent: 'a1' })
+  })
+
+  it('never releases coverage: both men of a swapped pair are still marked afterwards', () => {
+    const defenders = [P('d1', 'opp', [20, 78]), P('d2', 'opp', [48, 78])]
+    const opponents = [P('a1', 'ours', [48, 70]), P('a2', 'ours', [20, 72])]
+    const got = computeAssignments(defenders, opponents, defendingTop([34, 20]))
+    const covered = [...got.values()].filter((a) => a.type === 'mark').map((a) => a.opponent).sort()
+    expect(covered).toEqual(['a1', 'a2'])
+  })
+})
+
+describe('computeAssignments: aggressive pickup — spare defenders take men they can still reach', () => {
+  // The greedy only looks for opponents within the ambient ring (GRAVITY_R) of a defender's slot: a
+  // zonal block, man-marking the men it has stepped onto. Over 50 the ring widens linearly (see
+  // pickupReach) so a spare defender picks up a man he can get to within MARK_MAX — up the pitch and
+  // onto his shoulder, not standing behind the block waiting.
+  const buildWorld = () => {
+    // one spare defender sitting at his home, one attacker just past the ambient ring (GRAVITY_R=15)
+    const d = P('d1', 'opp', [34, 80], [34, 80])
+    const outsider = P('out', 'ours', [34, 63]) // 17 m from d1 — outside GRAVITY_R, inside pickupReach>50
+    return { d, outsider }
+  }
+
+  it('at the mid default (50) a man outside the ambient ring is left unmarked', () => {
+    const { d, outsider } = buildWorld()
+    const got = computeAssignments([d], [outsider], defendingTop([34, 20], { aggressiveness: 50 }))
+    expect(got.get('d1')!.type).not.toBe('mark')
+  })
+
+  it('above 50 the ring widens and the spare defender picks the man up', () => {
+    const { d, outsider } = buildWorld()
+    const got = computeAssignments([d], [outsider], defendingTop([34, 20], { aggressiveness: 80 }))
+    expect(got.get('d1')).toMatchObject({ type: 'mark', opponent: 'out' })
+  })
+
+  it('reach does not reach past MARK_MAX, however aggressive the setting', () => {
+    const d = P('d1', 'opp', [34, 80], [34, 80])
+    const tooFar = P('out', 'ours', [34, 30]) // 50 m from d1 — past MARK_MAX
+    const got = computeAssignments([d], [tooFar], defendingTop([34, 20], { aggressiveness: 100 }))
+    expect(got.get('d1')!.type).not.toBe('mark')
+  })
+
+  it('the pickup never releases a mark: no defender gives up his man to take a new one', () => {
+    // d1 already answers for a1 (the greedy's reach); a2 is a wider pickup candidate at aggressiveness 100.
+    // Only a SPARE defender picks a2 up, not d1. If no spare exists, a2 stays uncovered — this is the
+    // safety gate: a mark is only released when the orchestrator can hand it on (canReleaseMark), and
+    // the aggressive pickup pass does not satisfy that condition.
+    const d1 = P('d1', 'opp', [34, 80], [34, 80])
+    const a1 = P('a1', 'ours', [34, 72]) // 8 m — in the greedy's reach
+    const a2 = P('a2', 'ours', [34, 63]) // 17 m — only reachable with aggressiveness
+    const got = computeAssignments([d1], [a1, a2], defendingTop([34, 20], { aggressiveness: 100 }))
+    // d1 should still be on a1 (the greedy's choice), not reassigned to a2.
+    expect(got.get('d1')).toMatchObject({ type: 'mark', opponent: 'a1' })
+  })
+})
+
 describe('canReleaseMark: when a defender may leave the man he was given', () => {
   it('a defender who was given no man is always free to go', () => {
     expect(canReleaseMark({ type: 'free', handoffCost: Infinity }, 0)).toBe(true)
