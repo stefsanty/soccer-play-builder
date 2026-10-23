@@ -487,50 +487,52 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
       )}
       {mode !== 'preview' && !behaviorOpen && bottomMode === 'edit' && (
         <>
-          <div className="relative shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2" data-testid="step-bar" style={{ height: STRIP_HEIGHT }}>
-            <div className="flex items-center gap-1.5 overflow-x-auto pl-[72px]" role="group" aria-label="Steps">
-              {play?.steps.map((st, i) => {
-                const setup = i < SETUP_COUNT
-                return (
-                  <button
-                    key={st.id}
-                    type="button"
-                    data-testid={`step-chip-${i}`}
-                    aria-label={setup ? `Setup — ${st.title}` : `Step ${st.isAltBranch ? (st.altLabel ?? i) : i}`}
-                    aria-current={i === currentStepIndex ? 'step' : undefined}
-                    onClick={() => goToStep(i)}
-                    className={`h-9 shrink-0 touch-manipulation select-none rounded-full px-2.5 text-[13px] font-bold transition-all duration-100 active:scale-90 ${
-                      i === 0 ? 'min-w-14' : 'min-w-9'
-                    } ${
-                      i === currentStepIndex
-                        ? setup
-                          ? 'bg-white/15 text-[#e8edf2] ring-2 ring-[var(--app-accent)]'
-                          : 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]'
-                        : setup
-                          ? 'bg-white/5 text-[var(--app-muted)]'
-                          : 'bg-[var(--app-chip)] text-[#e8edf2]'
-                    } ${st.isAltBranch ? 'border border-dashed border-[#4cc9f0]' : ''}`}
-                  >
-                    {i === 0 ? 'Setup' : st.isAltBranch ? (st.altLabel ?? i) : i}
-                  </button>
-                )
-              })}
-              <button type="button" aria-label="Add Step" onClick={handleAddStep}
-                className="h-9 min-w-9 shrink-0 touch-manipulation select-none rounded-full border border-[#34455a] px-2 text-lg leading-none text-[var(--app-muted)] transition-all duration-100 hover:border-[var(--app-accent)] hover:text-[var(--app-accent)] active:scale-90 active:bg-white/10">
-                +
+          <div className="shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2" data-testid="step-bar" style={{ height: STRIP_HEIGHT }}>
+            <div className="flex h-full items-center gap-2">
+              {/* Back to Play Mode: inline on the left of the chip strip, so it never covers a chip. */}
+              <button
+                type="button"
+                data-testid="back-to-play"
+                aria-label="Back to Play mode"
+                onClick={() => { haptic(10); setBottomMode('play') }}
+                className="flex h-9 shrink-0 touch-manipulation items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 text-[11px] font-semibold text-[#cbd5e1] transition-all duration-100 hover:border-white/25 hover:bg-white/10 active:scale-95"
+              >
+                <ArrowLeft className="size-3.5" aria-hidden />
+                Play
               </button>
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" role="group" aria-label="Steps">
+                {play?.steps.map((st, i) => {
+                  const setup = i < SETUP_COUNT
+                  return (
+                    <button
+                      key={st.id}
+                      type="button"
+                      data-testid={`step-chip-${i}`}
+                      aria-label={setup ? `Setup — ${st.title}` : `Step ${st.isAltBranch ? (st.altLabel ?? i) : i}`}
+                      aria-current={i === currentStepIndex ? 'step' : undefined}
+                      onClick={() => goToStep(i)}
+                      className={`h-9 shrink-0 touch-manipulation select-none rounded-full px-2.5 text-[13px] font-bold transition-all duration-100 active:scale-90 ${
+                        i === 0 ? 'min-w-14' : 'min-w-9'
+                      } ${
+                        i === currentStepIndex
+                          ? setup
+                            ? 'bg-white/15 text-[#e8edf2] ring-2 ring-[var(--app-accent)]'
+                            : 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]'
+                          : setup
+                            ? 'bg-white/5 text-[var(--app-muted)]'
+                            : 'bg-[var(--app-chip)] text-[#e8edf2]'
+                      } ${st.isAltBranch ? 'border border-dashed border-[#4cc9f0]' : ''}`}
+                    >
+                      {i === 0 ? 'Setup' : st.isAltBranch ? (st.altLabel ?? i) : i}
+                    </button>
+                  )
+                })}
+                <button type="button" aria-label="Add Step" onClick={handleAddStep}
+                  className="h-9 min-w-9 shrink-0 touch-manipulation select-none rounded-full border border-[#34455a] px-2 text-lg leading-none text-[var(--app-muted)] transition-all duration-100 hover:border-[var(--app-accent)] hover:text-[var(--app-accent)] active:scale-90 active:bg-white/10">
+                  +
+                </button>
+              </div>
             </div>
-            {/* Back to Play Mode: pinned top-left so authors can hop back out of the editing UI from any step. */}
-            <button
-              type="button"
-              data-testid="back-to-play"
-              aria-label="Back to Play mode"
-              onClick={() => { haptic(10); setBottomMode('play') }}
-              className="absolute left-2 top-2 flex h-7 touch-manipulation items-center gap-1 rounded-full border border-white/10 bg-[rgba(11,16,21,0.9)] px-2.5 text-[11px] font-semibold text-[#cbd5e1] shadow-sm backdrop-blur transition-all duration-100 hover:border-white/25 hover:bg-[rgba(11,16,21,0.95)] active:scale-95"
-            >
-              <ArrowLeft className="size-3.5" aria-hidden />
-              Play
-            </button>
           </div>
           {step && (
             <RunsBar

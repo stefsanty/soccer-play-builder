@@ -16,8 +16,8 @@ import { haptic } from '@/lib/haptics'
 import { BAR_HEIGHT } from './RunsPanel'
 import { STRIP_HEIGHT } from './StepTextPanel'
 
-/** Indexes 0 and 1 are the pre-play setup block: starting positions and the opening frame. 2+ are play. */
-export const SETUP_COUNT = 2
+/** How many leading step indexes are the pre-play setup block (starting positions). The rest are play. */
+export const SETUP_COUNT = 1
 
 /** How long each step is held before Play-all advances. ~1.5s reads as "slide" pace, not animation. */
 const STEP_INTERVAL_MS = 1500
@@ -95,55 +95,58 @@ export function PlayModeBar({ onEnterEdit }: PlayModeBarProps) {
     i < SETUP_COUNT ? `Setup — ${title}` : `Step ${i - (SETUP_COUNT - 1)} — ${title}`
 
   return (
-    <div className="relative shrink-0" data-testid="play-mode-bar">
-      {/* The timeline. SETUP chips are muted and wider; play chips are the familiar numbered pills. */}
+    <div className="shrink-0" data-testid="play-mode-bar">
+      {/* The timeline. SETUP chip is muted and wider; play chips are the familiar numbered pills. Edit
+          sits in the same row, outside the scrollable chip area, so it never covers a chip and the
+          chips never scroll under it. */}
       <div
         data-testid="play-timeline"
         className="shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2"
         style={{ height: STRIP_HEIGHT }}
       >
-        <div className="flex items-center gap-1.5 overflow-x-auto pr-[72px]" role="group" aria-label="Full-play timeline">
-          {play.steps.map((st, i) => {
-            const setup = i < SETUP_COUNT
-            const active = i === currentStepIndex
-            return (
-              <button
-                key={st.id}
-                type="button"
-                data-testid={`play-step-chip-${i}`}
-                aria-label={ariaLabel(i, st.title)}
-                aria-current={active ? 'step' : undefined}
-                onClick={() => goTo(i)}
-                className={`h-9 shrink-0 touch-manipulation select-none rounded-full transition-all duration-100 active:scale-90 ${
-                  setup
-                    ? `min-w-[70px] px-3 text-[10px] font-bold uppercase tracking-wider ${
-                        active
-                          ? 'bg-white/15 text-[#e8edf2] ring-2 ring-[var(--app-accent)]'
-                          : 'bg-white/5 text-[var(--app-muted)]'
-                      }`
-                    : `min-w-9 px-2.5 text-[13px] font-bold ${
-                        active
-                          ? 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]'
-                          : 'bg-[var(--app-chip)] text-[#e8edf2]'
-                      } ${st.isAltBranch ? 'border border-dashed border-[#4cc9f0]' : ''}`
-                }`}
-              >
-                {label(i, st.title, !!st.isAltBranch, st.altLabel)}
-              </button>
-            )
-          })}
+        <div className="flex h-full items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" role="group" aria-label="Full-play timeline">
+            {play.steps.map((st, i) => {
+              const setup = i < SETUP_COUNT
+              const active = i === currentStepIndex
+              return (
+                <button
+                  key={st.id}
+                  type="button"
+                  data-testid={`play-step-chip-${i}`}
+                  aria-label={ariaLabel(i, st.title)}
+                  aria-current={active ? 'step' : undefined}
+                  onClick={() => goTo(i)}
+                  className={`h-9 shrink-0 touch-manipulation select-none rounded-full transition-all duration-100 active:scale-90 ${
+                    setup
+                      ? `min-w-[70px] px-3 text-[10px] font-bold uppercase tracking-wider ${
+                          active
+                            ? 'bg-white/15 text-[#e8edf2] ring-2 ring-[var(--app-accent)]'
+                            : 'bg-white/5 text-[var(--app-muted)]'
+                        }`
+                      : `min-w-9 px-2.5 text-[13px] font-bold ${
+                          active
+                            ? 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]'
+                            : 'bg-[var(--app-chip)] text-[#e8edf2]'
+                        } ${st.isAltBranch ? 'border border-dashed border-[#4cc9f0]' : ''}`
+                  }`}
+                >
+                  {label(i, st.title, !!st.isAltBranch, st.altLabel)}
+                </button>
+              )
+            })}
+          </div>
+          <button
+            type="button"
+            data-testid="enter-edit"
+            aria-label="Switch to Edit mode"
+            onClick={() => { haptic(10); onEnterEdit() }}
+            className="flex h-9 shrink-0 touch-manipulation items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 text-[11px] font-semibold text-[#cbd5e1] transition-all duration-100 hover:border-white/25 hover:bg-white/10 active:scale-95"
+          >
+            <Pencil className="size-3.5" aria-hidden />
+            Edit
+          </button>
         </div>
-        {/* Edit toggle: pinned top-right so it is always findable regardless of how the timeline scrolls. */}
-        <button
-          type="button"
-          data-testid="enter-edit"
-          aria-label="Switch to Edit mode"
-          onClick={() => { haptic(10); onEnterEdit() }}
-          className="absolute right-2 top-2 flex h-7 touch-manipulation items-center gap-1 rounded-full border border-white/10 bg-[rgba(11,16,21,0.9)] px-2.5 text-[11px] font-semibold text-[#cbd5e1] shadow-sm backdrop-blur transition-all duration-100 hover:border-white/25 hover:bg-[rgba(11,16,21,0.95)] active:scale-95"
-        >
-          <Pencil className="size-3.5" aria-hidden />
-          Edit
-        </button>
       </div>
 
       {/* Playback controls. Play-all is the primary action; restart and prev/next sit beside it. */}
