@@ -12,6 +12,8 @@ import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { PitchMarkings } from './PitchMarkings'
 import { PitchSurface } from './PitchSurface'
 import { StepTextPanel, STRIP_HEIGHT } from './StepTextPanel'
+import { StepTimeline } from './StepTimeline'
+import { ActionBar } from './ActionBar'
 import { BehaviorPanel } from './BehaviorPanel'
 import { RunsBar, RunsList } from './RunsPanel'
 import { FormationGhosts, FormationToggle } from './Formation'
@@ -21,9 +23,12 @@ import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import type { Play } from '@/lib/types/play'
 import { ballHolderAfter, stepChain } from '@/lib/engine/ballHolder'
 import { BALL_OFFSET, getTimeline } from '@/lib/engine/simulator'
+import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
 import { haptic } from '@/lib/haptics'
-import { ArrowLeft, Check, CircleDot, Move, MoveUpRight, Pencil, X, Zap } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
+import { ArrowLeft, Check, CircleDot, Pencil, X } from 'lucide-react'
+
+const PASS_SPEED_MPS = { slow: 20, medium: 40, fast: 70 } as const
+const RUN_SPEED_MPS = { jog: 15, sprint: 30 } as const
 
 interface PitchEditorProps {
   play?: Play
@@ -31,13 +36,6 @@ interface PitchEditorProps {
 }
 
 type Pos = { x: number; y: number }
-
-// All 3 modes available on steps 1+; step 0 (setup) only allows positioning — no passes or runs.
-const MODES: { mode: EditorMode; label: string; Icon: LucideIcon; setupOnly?: boolean }[] = [
-  { mode: 'select', label: 'Move', Icon: Move },
-  { mode: 'pass', label: 'Pass', Icon: MoveUpRight },
-  { mode: 'run', label: 'Run', Icon: Zap },
-]
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 /** A press has to travel this far (metres) before it counts as a drag rather than a tap. Without it a tap with
@@ -76,15 +74,28 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const toggleMoveHidden = useEditorStore((s) => s.toggleMoveHidden)
   const setStepMovesHidden = useEditorStore((s) => s.setStepMovesHidden)
   const setPreviewTime = useEditorStore((s) => s.setPreviewTime)
+  const updatePass = useEditorStore((s) => s.updatePass)
+  const updateMove = useEditorStore((s) => s.updateMove)
 
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<{ id: string; moved: boolean; wasSelected: boolean; from: Pos } | null>(null)
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null)
   // First click of a pass/run gesture: the source player.
   const [pendingFrom, setPendingFrom] = useState<string | null>(null)
+  const engine = useAnimationEngine(play, currentStepIndex)
+
   // the run list opens in the step text panel; it belongs to the step it was opened on
   const [runsOpen, setRunsOpen] = useState(false)
   useEffect(() => { setRunsOpen(false) }, [currentStepIndex])
+
+  // Which arrow (pass/run) the user tapped to edit its speed
+  const [selectedAction, setSelectedAction] = useState<
+    | { type: 'pass'; index: number }
+    | { type: 'run'; playerId: string }
+    | null
+  >(null)
+  useEffect(() => { setSelectedAction(null) }, [currentStepIndex])
+
   // the Behavior panel (defensive AI controls) takes over the bottom of the screen while it is open
   const [behaviorOpen, setBehaviorOpen] = useState(false)
   useEffect(() => { if (mode === 'preview') setBehaviorOpen(false) }, [mode])
@@ -165,8 +176,14 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const labelOf = (id: string) => play?.players.find((p) => p.id === id)?.label ?? id
 
   const commitPosition = (id: string, m: Pos) => {
-    if (currentStepIndex === 0) updatePlayerPosition(id, m.x, m.y)
-    else movePlayer(id, m.x, m.y, currentStepIndex)
+    if (currentStepIndex === 0) {
+      updatePlayerPosition(id, m.x, m.y)
+    } else {
+      const startPos = (prevPositions ?? positions).get(id)
+      const dist = startPos ? Math.hypot(m.x - startPos.x, m.y - startPos.y) : 0
+      const runEnd = dist > 0 ? dist / RUN_SPEED_MPS.jog : (step?.duration ?? 4)
+      movePlayer(id, m.x, m.y, currentStepIndex, runEnd)
+    }
     haptic(15)
     announce(currentStepIndex === 0 ? `Moved ${labelOf(id)}` : `Run set for ${labelOf(id)}`, m)
   }
@@ -200,7 +217,11 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
       if (!pendingFrom) setPendingFrom(id)
       else if (pendingFrom === id) clearSelection() // tap the passer again to cancel
       else {
-        addPass({ from: pendingFrom, to: id, startTime: 0, endTime: step.duration }, currentStepIndex)
+        const fromPos = (prevPositions ?? positions).get(pendingFrom)
+        const toPos = (prevPositions ?? positions).get(id)
+        const dist = fromPos && toPos ? Math.hypot(toPos.x - fromPos.x, toPos.y - fromPos.y) : 0
+        const passEnd = dist > 0 ? dist / PASS_SPEED_MPS.medium : step.duration
+        addPass({ from: pendingFrom, to: id, startTime: 0, endTime: passEnd, passingSpeed: 'medium' }, currentStepIndex)
         haptic(15)
         announce(`Pass added: ${labelOf(pendingFrom)} to ${labelOf(id)}`)
         clearSelection()
@@ -254,13 +275,20 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   }
 
   const svgPos = (id: string) => {
-    const p = drag?.id === id ? drag : positions.get(id)
+    if (drag?.id === id) return mToSvg(drag.x, drag.y)
+    if (engine.progress > 0 && engine.frame?.players[id]) {
+      const p = engine.frame.players[id]
+      return mToSvg(p.x, p.y)
+    }
+    const p = positions.get(id)
     return p ? mToSvg(p.x, p.y) : null
   }
 
-  // Facing at the end of the step (what the editor shows), and draw order: opponents underneath, our players
-  // on top, so a defender pressing a receiver never hides (or steals taps from) the receiver.
-  const faceOf = (id: string, team: 'ours' | 'opp') => timeline?.end[id]?.face ?? (team === 'ours' ? -Math.PI / 2 : Math.PI / 2)
+  // Facing at the end of the step (or from the live animation frame when the engine is running).
+  const faceOf = (id: string, team: 'ours' | 'opp') => {
+    if (engine.progress > 0 && engine.frame?.players[id]) return engine.frame.players[id].face
+    return timeline?.end[id]?.face ?? (team === 'ours' ? -Math.PI / 2 : Math.PI / 2)
+  }
   const drawOrder = play ? [...play.players].sort((a, b) => Number(a.team === 'ours') - Number(b.team === 'ours')) : []
 
   const holderId = play ? ballHolderAfter(play, currentStepIndex) : null
@@ -329,8 +357,12 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             const a = mToSvg(from.x, from.y)
             const b = mToSvg(m.toX, m.toY)
             return (
-              <line key={`run-${m.playerId}`} x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
-                stroke="#ffd43b" strokeWidth={3} strokeDasharray="8 6" markerEnd="url(#arrow-run)" data-testid="run-arrow" className="arrow-in" />
+              <g key={`run-${m.playerId}`} style={{ cursor: 'pointer', pointerEvents: 'all' }}
+                onClick={(e) => { e.stopPropagation(); setSelectedAction({ type: 'run', playerId: m.playerId }) }}>
+                <line x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY} stroke="transparent" strokeWidth={16} />
+                <line x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
+                  stroke="#ffd43b" strokeWidth={3} strokeDasharray="8 6" markerEnd="url(#arrow-run)" data-testid="run-arrow" className="arrow-in" />
+              </g>
             )
           })}
 
@@ -351,8 +383,12 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             const b = svgPos(pass.to)
             if (!a || !b) return null
             return (
-              <line key={`pass-${i}`} x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
-                stroke="white" strokeWidth={3} markerEnd="url(#arrow-pass)" data-testid="pass-arrow" className="arrow-in" />
+              <g key={`pass-${i}`} style={{ cursor: 'pointer', pointerEvents: 'all' }}
+                onClick={(e) => { e.stopPropagation(); setSelectedAction({ type: 'pass', index: i }) }}>
+                <line x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY} stroke="transparent" strokeWidth={16} />
+                <line x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
+                  stroke="white" strokeWidth={3} markerEnd="url(#arrow-pass)" data-testid="pass-arrow" className="arrow-in" />
+              </g>
             )
           })}
 
@@ -417,13 +453,25 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             )
           })}
 
-          {holderPos && (
+          {holderPos && engine.progress === 0 && (
             <g transform={`translate(${holderPos.svgX + Math.cos(holderFace) * BALL_OFFSET * 10}, ${holderPos.svgY + Math.sin(holderFace) * BALL_OFFSET * 10})`} pointerEvents="none" data-testid="ball">
               <circle r={15} fill="none" stroke="#ffd43b" strokeWidth={3} className="ball-pulse" />
               <circle r={10} fill="#fff" stroke="#111" strokeWidth={2.5} />
               <circle r={3.5} fill="#111" />
             </g>
           )}
+
+          {engine.progress > 0 && engine.frame && (engine.frame.ball.holder || engine.frame.ball.flying) && (() => {
+            const b = mToSvg(engine.frame.ball.x, engine.frame.ball.y)
+            const lift = engine.frame.ball.lift
+            return (
+              <g data-testid="animated-ball" pointerEvents="none" transform={`translate(${b.svgX}, ${b.svgY})`}>
+                <circle r={15 + lift * 6} fill="none" stroke="#ffd43b" strokeWidth={3} className="ball-pulse" />
+                <circle r={10 + lift * 6} fill="#fff" stroke="#111" strokeWidth={2.5} />
+                <circle r={3.5 + lift * 2} fill="#111" />
+              </g>
+            )
+          })()}
         </svg>
         <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col gap-2">
           <div className="flex items-start justify-between gap-2">
@@ -453,56 +501,94 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             )}
           </div>
         </div>
-        {selectedPlayerId && (
-          <div
-            role="toolbar"
-            aria-label="Player actions"
-            data-testid="player-toolbar"
-            className="absolute inset-x-3 bottom-3 rounded-2xl border border-white/10 bg-[rgba(11,16,21,0.92)] p-1.5 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-4 duration-200"
-          >
-            <div className="flex items-center justify-between px-2 pb-1 text-xs font-semibold text-[var(--app-muted)]">
-              <span>
-                Selected: <span className="text-[#e8edf2]">{labelOf(selectedPlayerId)}</span>
-              </span>
-              <button type="button" aria-label="Deselect" data-testid="deselect" onClick={clearSelection}
-                className="flex size-6 touch-manipulation items-center justify-center rounded-full transition-transform duration-100 hover:bg-white/10 active:scale-90">
-                <X className="size-4" aria-hidden />
-              </button>
-            </div>
-            <div className={`grid gap-1 ${isSetupStep ? 'grid-cols-1' : 'grid-cols-3'}`}>
-              {MODES.filter((m) => !isSetupStep || m.mode === 'select').map(({ mode: m, label, Icon }) => (
-                <button
-                  key={m}
-                  type="button"
-                  aria-label={label}
-                  aria-pressed={mode === m}
-                  data-testid={`mode-${m}`}
-                  onClick={() => changeMode(m)}
-                  className={`flex h-11 touch-manipulation select-none flex-col items-center justify-center gap-0.5 rounded-[10px] text-[10px] font-medium transition-all duration-100 active:scale-95 ${
-                    mode === m ? 'bg-[#14b8a6] text-[#0f172a] active:bg-[#5eead4]' : 'text-[#cbd5e1] hover:bg-white/5 active:bg-white/15'
-                  }`}
-                >
-                  <Icon className="size-5" aria-hidden />
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
         </div>
       )}
       {mode !== 'preview' && step && behaviorOpen && (
         <BehaviorPanel step={step} stepIndex={currentStepIndex} onClose={() => setBehaviorOpen(false)} />
       )}
-      {mode !== 'preview' && step && !behaviorOpen && (
+      {mode !== 'preview' && step && !behaviorOpen && !isPlayingAll && (
+        <StepTimeline
+          key={step.id}
+          badge={isSetupStep ? 'S' : (step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex)}
+          title={step.title}
+          stepLabel={isSetupStep ? 'Starting positions' : `Step ${currentStepIndex + 1} of ${play?.steps.length ?? 1}`}
+          step={step}
+          engine={engine}
+          body={runsOpen && step.moves.length > 0 ? <RunsList moves={step.moves} labelOf={labelOf} onToggle={(id) => toggleMoveHidden(id, currentStepIndex)} /> : undefined}
+        />
+      )}
+      {mode !== 'preview' && step && !behaviorOpen && isPlayingAll && (
         <StepTextPanel
           key={step.id}
           badge={isSetupStep ? 'S' : (step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex)}
           title={step.title}
           stepLabel={isSetupStep ? 'Starting positions' : `Step ${currentStepIndex + 1} of ${play?.steps.length ?? 1}`}
-
-          body={runsOpen && step.moves.length > 0 ? <RunsList moves={step.moves} labelOf={labelOf} onToggle={(id) => toggleMoveHidden(id, currentStepIndex)} /> : undefined}
         />
+      )}
+      {/* Speed editor: shown when the user taps a pass or run arrow */}
+      {mode !== 'preview' && step && !behaviorOpen && !isPlayingAll && selectedAction && (() => {
+        if (selectedAction.type === 'pass') {
+          const pass = step.passes[selectedAction.index]
+          if (!pass) return null
+          return (
+            <div className="flex shrink-0 items-center gap-2 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 py-2.5">
+              <span className="text-xs font-medium text-[var(--app-muted)]">Pass speed</span>
+              {(['slow', 'medium', 'fast'] as const).map((s) => (
+                <button key={s} type="button"
+                  onClick={() => {
+                    const fromPos = (prevPositions ?? positions).get(pass.from)
+                    const toPos = (prevPositions ?? positions).get(pass.to)
+                    const dist = fromPos && toPos ? Math.hypot(toPos.x - fromPos.x, toPos.y - fromPos.y) : 0
+                    const newEnd = dist > 0 ? pass.startTime + dist / PASS_SPEED_MPS[s] : step.duration
+                    updatePass(currentStepIndex, selectedAction.index, { passingSpeed: s, endTime: newEnd })
+                  }}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition-all active:scale-95 ${
+                    pass.passingSpeed === s
+                      ? 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]'
+                      : 'bg-white/10 text-[#e8edf2] hover:bg-white/20'
+                  }`}
+                >
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
+              <button type="button" onClick={() => setSelectedAction(null)}
+                className="ml-auto flex touch-manipulation items-center justify-center rounded-full p-1 text-[var(--app-muted)] transition-transform hover:bg-white/10 active:scale-90">
+                <X className="size-4" aria-hidden />
+              </button>
+            </div>
+          )
+        }
+        const move = step.moves.find(m => m.playerId === selectedAction.playerId)
+        if (!move) return null
+        return (
+          <div className="flex shrink-0 items-center gap-2 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 py-2.5">
+            <span className="text-xs font-medium text-[var(--app-muted)]">Run speed</span>
+            {(['jog', 'sprint'] as const).map((s) => (
+              <button key={s} type="button"
+                onClick={() => {
+                  const startPos = (prevPositions ?? positions).get(move.playerId)
+                  const dist = startPos ? Math.hypot(move.toX - startPos.x, move.toY - startPos.y) : 0
+                  const newEnd = dist > 0 ? move.startTime + dist / RUN_SPEED_MPS[s] : step.duration
+                  updateMove(currentStepIndex, move.playerId, { runningSpeed: s, endTime: newEnd })
+                }}
+                className={`rounded-full px-3 py-1 text-xs font-semibold transition-all active:scale-95 ${
+                  move.runningSpeed === s
+                    ? 'bg-[var(--app-accent)] text-[var(--app-accent-ink)]'
+                    : 'bg-white/10 text-[#e8edf2] hover:bg-white/20'
+                }`}
+              >
+                {s.charAt(0).toUpperCase() + s.slice(1)}
+              </button>
+            ))}
+            <button type="button" onClick={() => setSelectedAction(null)}
+              className="ml-auto flex touch-manipulation items-center justify-center rounded-full p-1 text-[var(--app-muted)] transition-transform hover:bg-white/10 active:scale-90">
+              <X className="size-4" aria-hidden />
+            </button>
+          </div>
+        )
+      })()}
+      {mode !== 'preview' && !behaviorOpen && !isPlayingAll && (
+        <ActionBar mode={mode} isSetupStep={isSetupStep} onChangeMode={changeMode} />
       )}
       {mode !== 'preview' && !behaviorOpen && bottomMode === 'play' && (
         <PlayModeBar onEnterEdit={() => { haptic(10); setPlayingAll(false); setBottomMode('edit') }} />

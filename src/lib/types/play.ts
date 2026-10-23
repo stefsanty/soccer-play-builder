@@ -100,6 +100,7 @@ export interface PlayerMove {
   easeFraction?: number
   via?: [number, number]  // bezier control point
   hidden?: boolean        // don't draw this run's arrow (the move itself still happens)
+  runningSpeed?: 'jog' | 'sprint'
 }
 
 export interface PassAnimation {
@@ -108,6 +109,7 @@ export interface PassAnimation {
   startTime: number
   endTime: number
   isLob?: boolean
+  passingSpeed?: 'slow' | 'medium' | 'fast'
 }
 
 export interface FaceTarget {

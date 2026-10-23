@@ -43,8 +43,10 @@ interface EditorState {
   addStep: () => void
   removeStep: (index: number) => void
   updateStep: (index: number, update: Partial<PlayStep>) => void
-  movePlayer: (playerId: string, toX: number, toY: number, stepIndex: number) => void
+  movePlayer: (playerId: string, toX: number, toY: number, stepIndex: number, endTime?: number) => void
   addPass: (pass: PassAnimation, stepIndex: number) => void
+  updatePass: (stepIndex: number, passIndex: number, update: Partial<PassAnimation>) => void
+  updateMove: (stepIndex: number, playerId: string, update: Partial<PlayerMove>) => void
   updatePlayerPosition: (playerId: string, x: number, y: number) => void  // initial position
   /** Merge `patch` into a team's defensive-AI config for a step; keys set to undefined are removed. */
   updateStepAi: (stepIndex: number, team: 'ours' | 'opp', patch: Partial<AiConfig>) => void
@@ -136,11 +138,11 @@ export const useEditorStore = create<EditorState>()(
       Object.assign(s.play.steps[index], update)
       s.isDirty = true
     }),
-    movePlayer: (playerId, toX, toY, stepIndex) => set((s) => {
+    movePlayer: (playerId, toX, toY, stepIndex, endTime) => set((s) => {
       if (!s.play) return
       const step = s.play.steps[stepIndex]
       const existing = step.moves.findIndex(m => m.playerId === playerId)
-      const move: PlayerMove = { playerId, toX, toY, startTime: 0, endTime: step.duration }
+      const move: PlayerMove = { playerId, toX, toY, startTime: 0, endTime: endTime ?? step.duration }
       if (existing >= 0 && step.moves[existing].hidden) move.hidden = true // re-aiming a run keeps its arrow hidden
       if (existing >= 0) step.moves[existing] = move
       else step.moves.push(move)
@@ -149,6 +151,18 @@ export const useEditorStore = create<EditorState>()(
     addPass: (pass, stepIndex) => set((s) => {
       if (!s.play) return
       s.play.steps[stepIndex].passes.push(pass)
+      s.isDirty = true
+    }),
+    updatePass: (stepIndex, passIndex, update) => set((s) => {
+      if (!s.play) return
+      const pass = s.play.steps[stepIndex]?.passes[passIndex]
+      if (pass) Object.assign(pass, update)
+      s.isDirty = true
+    }),
+    updateMove: (stepIndex, playerId, update) => set((s) => {
+      if (!s.play) return
+      const move = s.play.steps[stepIndex]?.moves.find(m => m.playerId === playerId)
+      if (move) Object.assign(move, update)
       s.isDirty = true
     }),
     updatePlayerPosition: (playerId, x, y) => set((s) => {
