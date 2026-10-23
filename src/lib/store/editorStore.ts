@@ -52,6 +52,8 @@ interface EditorState {
   /** Add a hidden "stay in place" move that locks the player out of AI suggestions. */
   addHold: (stepIndex: number, playerId: string, x: number, y: number) => void
   updatePlayerPosition: (playerId: string, x: number, y: number) => void  // initial position
+  /** Place the ball's starting spot (stored on the setup step, steps[0]). */
+  setBallPosition: (x: number, y: number) => void
   /** Merge `patch` into a team's defensive-AI config for a step; keys set to undefined are removed. */
   updateStepAi: (stepIndex: number, team: 'ours' | 'opp', patch: Partial<AiConfig>) => void
   /** Show/hide the arrow of one move in a step (`hidden: true` on the move). */
@@ -195,6 +197,12 @@ export const useEditorStore = create<EditorState>()(
       if (!s.play) return
       const player = s.play.players.find(p => p.id === playerId)
       if (player) { player.x = x; player.y = y }
+      s.isDirty = true
+    }),
+    setBallPosition: (x, y) => set((s) => {
+      const setup = s.play?.steps[0]
+      if (!setup) return
+      setup.ballPosition = { x, y }
       s.isDirty = true
     }),
     updateStepAi: (stepIndex, team, patch) => set((s) => {

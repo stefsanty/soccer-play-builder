@@ -45,6 +45,7 @@ next-env.d.ts
 # playwright
 /test-results/
 /playwright-report/
+/.playwright-mcp/
 
 # supabase CLI local state
 supabase/.temp/

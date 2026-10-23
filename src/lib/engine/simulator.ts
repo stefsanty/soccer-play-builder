@@ -17,7 +17,7 @@
 
 import type { AiConfig, AiRole, DefenderRule, FaceTarget, PassAnimation, Play, PlayStep, PlayerMove } from '@/lib/types/play'
 import { trapezoid } from '@/lib/engine/physics'
-import { baseStepIndex, ballHolderBefore } from '@/lib/engine/ballHolder'
+import { baseStepIndex, ballHolderBefore, setupBallPosition } from '@/lib/engine/ballHolder'
 import { computeAiTargets, type AiWorld, type Duty, type Team } from '@/lib/engine/ai'
 import { followTarget, newFollowTrack, pickHandoff, trackExit, type FollowTrack, type HandoffCandidate } from '@/lib/engine/follow'
 
@@ -45,6 +45,8 @@ const PERSONAL = 5
 /** ...at a walking pace, so it nudges players apart over a moment instead of snapping them. */
 const PERSONAL_V = 5.0 // m/s
 const MOVING = 0.8 // m/s, our players face their run direction above this speed
+/** The ball eases from its inherited spot (previous step's end, or the setup spot) to the holder's feet over this long. */
+const BALL_SETTLE = 0.4 // s
 
 const UP = -Math.PI / 2
 const DOWN = Math.PI / 2
@@ -499,8 +501,13 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
     // (ball needs this frame's positions, so it is computed against `frame` before it is pushed)
     frames.push(frame)
     frame.ball = ballAt(t)
-    // step N (N>0): pin the ball at frame 0 to the exact position the previous step ended on
-    if (k === 0 && startBall) frame.ball = { ...frame.ball, x: startBall[0], y: startBall[1] }
+    // ease the ball in from where it rested at the step start (the previous step's exact end position,
+    // or the setup spot for the first step) instead of snapping it to the holder's feet
+    if (startBall && t < BALL_SETTLE && !frame.ball.flying) {
+      const u = t / BALL_SETTLE
+      const s = u * u * (3 - 2 * u)
+      frame.ball = { ...frame.ball, x: startBall[0] + (frame.ball.x - startBall[0]) * s, y: startBall[1] + (frame.ball.y - startBall[1]) * s }
+    }
     // defenders only watch a ball that exists (a play without passes has none)
     lastBall = frame.ball.holder || frame.ball.flying ? frame.ball : null
     for (const id of ids) {
@@ -530,7 +537,9 @@ export function getTimeline(play: Play, stepIndex: number): StepTimeline {
   const baseTl = base < 0 ? null : getTimeline(play, base)
   const start = baseTl ? baseTl.end : initialState(play)
   const lastBallFrame = baseTl?.frames.at(-1)?.ball
-  const startBall: Pt | undefined = lastBallFrame ? [lastBallFrame.x, lastBallFrame.y] : undefined
+  const setupBall = setupBallPosition(play)
+  // the first step of a chain starts the ball on the authored setup spot (default: centre)
+  const startBall: Pt = lastBallFrame ? [lastBallFrame.x, lastBallFrame.y] : [setupBall.x, setupBall.y]
   const tl = simulateStep(play, i, start, ballHolderBefore(play, i), startBall)
   perPlay.set(i, tl)
   return tl

@@ -47,7 +47,8 @@ export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior, onSwi
       className={`${btn} shrink-0 bg-[var(--app-card)] px-3 text-[#e8edf2] hover:bg-white/5`}
     >
       <SlidersHorizontal className="size-[18px]" aria-hidden />
-      <span>Behavior</span>
+      {/* icon-only on narrow phones: the full row (runs, hide, behavior, play) does not fit 390px with labels */}
+      <span className="hidden min-[430px]:inline">Behavior</span>
     </button>
   )
   return (
@@ -74,16 +75,16 @@ export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior, onSwi
           {behaviorButton}
         </div>
       ) : (
-        <div className={`grid ${onSwitchToPlay ? 'grid-cols-[1.4fr_1fr_1fr_auto]' : 'grid-cols-[1.4fr_1fr_1fr]'} gap-1.5`}>
+        <div className="flex gap-1.5">
           <button
             type="button"
             data-testid="runs-toggle"
             aria-expanded={open}
             aria-controls="runs-panel"
             onClick={() => onOpenChange(!open)}
-            className={`${btn} ${open ? 'bg-[#14b8a6] text-[#0f172a]' : 'bg-[var(--app-card)] text-[#e8edf2] hover:bg-white/5'}`}
+            className={`${btn} min-w-0 flex-1 ${open ? 'bg-[#14b8a6] text-[#0f172a]' : 'bg-[var(--app-card)] text-[#e8edf2] hover:bg-white/5'}`}
           >
-            <Route className="size-[18px]" aria-hidden />
+            <Route className="size-[18px] shrink-0" aria-hidden />
             <span className="truncate">
               Runs · {moves.length}
               {hidden > 0 && <span className="ml-1 opacity-70">({hidden} hidden)</span>}
@@ -92,11 +93,12 @@ export function RunsBar({ moves, open, onOpenChange, onSetAll, onBehavior, onSwi
           <button
             type="button"
             data-testid="runs-toggle-all"
+            aria-label={allHidden ? 'Show all run arrows' : 'Hide all run arrows'}
             onClick={() => onSetAll(!allHidden)}
-            className={`${btn} bg-[var(--app-card)] text-[var(--app-accent)] hover:bg-white/5`}
+            className={`${btn} shrink-0 bg-[var(--app-card)] px-3 text-[var(--app-accent)] hover:bg-white/5`}
           >
             {allHidden ? <Eye className="size-[18px]" aria-hidden /> : <EyeOff className="size-[18px]" aria-hidden />}
-            {allHidden ? 'Show all' : 'Hide all'}
+            <span className="hidden min-[430px]:inline">{allHidden ? 'Show all' : 'Hide all'}</span>
           </button>
           {behaviorButton}
           {playButton}

@@ -389,7 +389,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
   // Same strip as the Edit-mode step bar (same slot, same height): one pill per step; branches dashed.
   const stepBar = (
     <div data-testid="step-bar" className={fill ? 'shrink-0 border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-3 pt-2' : 'rounded-lg bg-[var(--app-card)] p-3'} style={fill ? { height: STRIP_HEIGHT } : undefined}>
-      <div className="flex items-center gap-1.5 overflow-x-auto" role="group" aria-label="Steps">
+      <div className="no-scrollbar flex items-center gap-1.5 overflow-x-auto" role="group" aria-label="Steps">
         {play.steps.map((st, i) => (
           <button
             key={st.id}

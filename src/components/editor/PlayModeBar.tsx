@@ -81,7 +81,7 @@ export function PlayModeBar({ onEnterEdit }: PlayModeBarProps) {
         style={{ height: STRIP_HEIGHT }}
       >
         <div className="flex h-full items-center gap-2">
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" role="group" aria-label="Full-play timeline">
+          <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" role="group" aria-label="Full-play timeline">
             {play.steps.map((st, i) => {
               const setup = i < SETUP_COUNT
               const active = i === currentStepIndex

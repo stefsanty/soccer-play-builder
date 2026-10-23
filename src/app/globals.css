@@ -148,6 +148,10 @@
     @apply font-sans;
   }
 }
+/* Horizontal chip strips scroll without a visible scrollbar: a classic (non-overlay) scrollbar
+   eats into the fixed-height strip and squeezes the chips. */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
 /* Editor feedback animations */
 @keyframes ball-pulse {
   0% { transform: scale(0.8); opacity: 0.9; }

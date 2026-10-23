@@ -1,4 +1,5 @@
 import type { Play } from '@/lib/types/play'
+import { PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 
 /**
  * Step graph. Main steps run in order; an alternative-branch step (`isAltBranch`) does not follow the
@@ -37,6 +38,11 @@ export function neighbourStep(play: Play, stepIndex: number, dir: 1 | -1): numbe
   j = step.isAltBranch ? (step.altFrom ?? stepIndex - 1) : stepIndex - 1
   while (j >= 0 && isAlt(play, j)) j--
   return j >= 0 && j !== stepIndex ? j : null
+}
+
+/** Where the ball sits before the play starts: the setup step's authored spot, or the centre spot. */
+export function setupBallPosition(play: Play): { x: number; y: number } {
+  return play.steps[0]?.ballPosition ?? { x: PITCH_W / 2, y: PITCH_H / 2 }
 }
 
 /**

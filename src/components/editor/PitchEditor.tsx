@@ -21,7 +21,7 @@ import { AnimatedPitch } from './AnimatedPitch'
 import { PlayModeBar, SETUP_COUNT } from './PlayModeBar'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import type { Play } from '@/lib/types/play'
-import { ballHolderAfter, stepChain } from '@/lib/engine/ballHolder'
+import { ballHolderAfter, setupBallPosition, stepChain } from '@/lib/engine/ballHolder'
 import { BALL_OFFSET, getTimeline } from '@/lib/engine/simulator'
 import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
 import { computeAutoMovements, type AISuggestedMove, type PitchState } from '@/lib/engine/attackingAI'
@@ -74,6 +74,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const movePlayer = useEditorStore((s) => s.movePlayer)
   const addPass = useEditorStore((s) => s.addPass)
   const updatePlayerPosition = useEditorStore((s) => s.updatePlayerPosition)
+  const setBallPosition = useEditorStore((s) => s.setBallPosition)
   const toggleMoveHidden = useEditorStore((s) => s.toggleMoveHidden)
   const setStepMovesHidden = useEditorStore((s) => s.setStepMovesHidden)
   const setPreviewTime = useEditorStore((s) => s.setPreviewTime)
@@ -86,6 +87,9 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<{ id: string; moved: boolean; wasSelected: boolean; from: Pos } | null>(null)
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null)
+  // Dragging the setup-step ball (its committed spot lives on steps[0].ballPosition)
+  const ballDragRef = useRef<{ moved: boolean; from: Pos } | null>(null)
+  const [ballDrag, setBallDrag] = useState<Pos | null>(null)
   // First click of a pass/run gesture: the source player.
   const [pendingFrom, setPendingFrom] = useState<string | null>(null)
   const engine = useAnimationEngine(play, currentStepIndex)
@@ -282,6 +286,38 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     addHold(currentStepIndex, selectedPlayerId, pos.x, pos.y)
     haptic(15)
     announce(`${labelOf(selectedPlayerId)} holding position`)
+  }
+
+  // Setup-step ball: the draggable starting spot of the ball
+  const setupBall = play ? setupBallPosition(play) : null
+  const onBallDown = (e: React.PointerEvent<SVGGElement>) => {
+    if (!canEdit || !setupBall) return
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    haptic(8)
+    ballDragRef.current = { moved: false, from: setupBall }
+    setBallDrag(setupBall)
+  }
+  const onBallMove = (e: React.PointerEvent<SVGGElement>) => {
+    if (!ballDragRef.current) return
+    const m = toMeters(e)
+    if (!m) return
+    const { from } = ballDragRef.current
+    if (Math.hypot(m.x - from.x, m.y - from.y) >= DRAG_MIN_M) ballDragRef.current.moved = true
+    setBallDrag(m)
+  }
+  const onBallUp = (e: React.PointerEvent<SVGGElement>) => {
+    const d = ballDragRef.current
+    if (!d) return
+    ballDragRef.current = null
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    const m = toMeters(e)
+    setBallDrag(null)
+    if (d.moved && m) {
+      setBallPosition(m.x, m.y)
+      haptic(15)
+      announce('Ball placed', m)
+    }
   }
 
   const onPlayerDown = (e: React.PointerEvent<SVGGElement>, id: string) => {
@@ -515,7 +551,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             )
           })()}
 
-          {holderPos && (
+          {!isSetupStep && holderPos && (
             <ellipse cx={holderPos.svgX} cy={holderPos.svgY} rx={29} ry={29} fill="none" stroke="#ffd43b" strokeWidth={3}
               strokeDasharray="6 5" pointerEvents="none" data-testid="ball-holder-ring" />
           )}
@@ -568,13 +604,37 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             )
           })}
 
-          {holderPos && engine.progress === 0 && (
+          {!isSetupStep && holderPos && engine.progress === 0 && (
             <g transform={`translate(${holderPos.svgX + Math.cos(holderFace) * BALL_OFFSET * 10}, ${holderPos.svgY + Math.sin(holderFace) * BALL_OFFSET * 10})`} pointerEvents="none" data-testid="ball">
               <circle r={15} fill="none" stroke="#ffd43b" strokeWidth={3} className="ball-pulse" />
               <circle r={10} fill="#fff" stroke="#111" strokeWidth={2.5} />
               <circle r={3.5} fill="#111" />
             </g>
           )}
+
+          {/* Setup step: the ball is a draggable element — where the play starts from */}
+          {isSetupStep && setupBall && engine.progress === 0 && (() => {
+            const bp = ballDrag ?? setupBall
+            const s = mToSvg(bp.x, bp.y)
+            return (
+              <g
+                data-testid="setup-ball"
+                transform={`translate(${s.svgX}, ${s.svgY})`}
+                onPointerDown={onBallDown}
+                onPointerMove={onBallMove}
+                onPointerUp={onBallUp}
+                onPointerCancel={onBallUp}
+                className={canEdit ? 'cursor-grab active:cursor-grabbing' : ''}
+                style={{ touchAction: 'none' }}
+              >
+                {/* oversized invisible hit area: easier to grab on a phone */}
+                <circle r={26} fill="transparent" />
+                <circle r={15} fill="none" stroke="#ffd43b" strokeWidth={3} className="ball-pulse" pointerEvents="none" />
+                <circle r={10} fill="#fff" stroke="#111" strokeWidth={2.5} pointerEvents="none" />
+                <circle r={3.5} fill="#111" pointerEvents="none" />
+              </g>
+            )
+          })()}
 
           {engine.progress > 0 && engine.frame && (engine.frame.ball.holder || engine.frame.ball.flying) && (() => {
             const b = mToSvg(engine.frame.ball.x, engine.frame.ball.y)
@@ -590,10 +650,15 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
         </svg>
         <div className="pointer-events-none absolute inset-x-3 top-3 flex flex-col gap-2">
           <div className="flex items-start justify-between gap-2">
-            {holderId ? (
+            {!isSetupStep && holderId ? (
               <div data-testid="ball-chip" className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-[rgba(11,16,21,0.88)] px-3 py-1 text-xs font-semibold text-[#e8edf2] shadow-lg backdrop-blur-md">
                 <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />
                 Ball: {labelOf(holderId)}
+              </div>
+            ) : isSetupStep ? (
+              <div data-testid="ball-chip" className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-[rgba(11,16,21,0.88)] px-3 py-1 text-xs font-semibold text-[#e8edf2] shadow-lg backdrop-blur-md">
+                <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />
+                Drag the ball to place it
               </div>
             ) : (
               <span />
@@ -755,7 +820,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                 <ArrowLeft className="size-3.5" aria-hidden />
                 Play
               </button>
-              <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" role="group" aria-label="Steps">
+              <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" role="group" aria-label="Steps">
                 {play?.steps.map((st, i) => {
                   const setup = i < SETUP_COUNT
                   return (

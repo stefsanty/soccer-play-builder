@@ -13,7 +13,7 @@ export function StepSequencer() {
   const removeStep = useEditorStore((s) => s.removeStep)
 
   return (
-    <div className="flex items-center gap-2 overflow-x-auto p-2">
+    <div className="no-scrollbar flex items-center gap-2 overflow-x-auto p-2">
       {play?.steps.map((step, i) => (
         <Button
           key={step.id}

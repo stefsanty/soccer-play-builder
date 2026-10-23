@@ -148,6 +148,8 @@ export interface OptionGroup {
 
 export interface PlayStep {
   ai?: { ours?: AiConfig; opp?: AiConfig }   // defensive AI per team
+  /** Starting ball spot in metres, authored on the setup step (steps[0]). Unset = centre pitch. */
+  ballPosition?: { x: number; y: number }
   id: string
   index: number
   title: string

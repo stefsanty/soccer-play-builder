@@ -79,7 +79,7 @@ export function PlayerActionPanel({
     <section
       data-testid="player-action-panel"
       aria-label={`${playerLabel} actions`}
-      className="flex shrink-0 flex-col border-t border-[var(--app-line)] bg-[var(--bg-base)]"
+      className="relative flex shrink-0 flex-col border-t border-[var(--app-line)] bg-[var(--bg-base)]"
       style={{ height: PANEL_HEIGHT }}
     >
       {/* Header */}
@@ -99,7 +99,7 @@ export function PlayerActionPanel({
       </div>
 
       {/* Action chips + Add button */}
-      <div className="flex min-h-0 flex-1 items-center gap-2 overflow-x-auto px-3 pb-2">
+      <div className="no-scrollbar flex min-h-0 flex-1 items-center gap-2 overflow-x-auto px-3 pb-2">
         {actions.map((action) => {
           const Icon = CHIP_ICON[action.type]
           return (
@@ -157,44 +157,43 @@ export function PlayerActionPanel({
         )}
 
         {/* Add action button */}
-        <div className="relative shrink-0">
-          <button
-            type="button"
-            aria-label="Add action"
-            aria-expanded={pickerOpen}
-            data-testid="add-action-btn"
-            onClick={() => setPickerOpen((v) => !v)}
-            className="flex h-9 touch-manipulation items-center gap-1.5 rounded-lg border border-[var(--app-line)] bg-white/5 px-3 text-[12px] font-semibold text-[var(--app-muted)] hover:bg-white/10 active:scale-95"
-          >
-            <Plus className="size-3.5" aria-hidden />
-            Add
-          </button>
-
-          {pickerOpen && (
-            <>
-              {/* Dismiss layer */}
-              <div className="fixed inset-0 z-10" onClick={() => setPickerOpen(false)} />
-              {/* Picker popover */}
-              <div
-                data-testid="action-picker"
-                className="absolute bottom-full left-0 z-20 mb-2 w-52 overflow-hidden rounded-xl border border-[var(--app-line)] bg-[var(--app-card)] shadow-2xl"
-              >
-                {PICKER.map(({ label, Icon, color, onSelect }) => (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={() => { onSelect(); setPickerOpen(false) }}
-                    className="flex w-full touch-manipulation items-center gap-3 px-4 py-3 text-[13px] font-medium text-[#e8edf2] hover:bg-white/10 active:bg-white/15"
-                  >
-                    <Icon className={`size-4 shrink-0 ${color}`} aria-hidden />
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
+        <button
+          type="button"
+          aria-label="Add action"
+          aria-expanded={pickerOpen}
+          data-testid="add-action-btn"
+          onClick={() => setPickerOpen((v) => !v)}
+          className="flex h-9 shrink-0 touch-manipulation items-center gap-1.5 rounded-lg border border-[var(--app-line)] bg-white/5 px-3 text-[12px] font-semibold text-[var(--app-muted)] hover:bg-white/10 active:scale-95"
+        >
+          <Plus className="size-3.5" aria-hidden />
+          Add
+        </button>
       </div>
+
+      {/* Picker popover — anchored to the panel, NOT inside the scrolling chip row: the row's
+          overflow clips anything poking above the panel, which also makes it unclickable. */}
+      {pickerOpen && (
+        <>
+          {/* Dismiss layer */}
+          <div className="fixed inset-0 z-10" onClick={() => setPickerOpen(false)} />
+          <div
+            data-testid="action-picker"
+            className="absolute bottom-full left-3 z-20 mb-2 w-52 overflow-hidden rounded-xl border border-[var(--app-line)] bg-[var(--app-card)] shadow-2xl"
+          >
+            {PICKER.map(({ label, Icon, color, onSelect }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => { onSelect(); setPickerOpen(false) }}
+                className="flex w-full touch-manipulation items-center gap-3 px-4 py-3 text-[13px] font-medium text-[#e8edf2] hover:bg-white/10 active:bg-white/15"
+              >
+                <Icon className={`size-4 shrink-0 ${color}`} aria-hidden />
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       {/* Conflict strip */}
       {conflicts.length > 0 && (
         <div className="flex shrink-0 items-center gap-2 border-t border-[#7f1d1d]/60 bg-[#450a0a]/60 px-3 py-1.5">
