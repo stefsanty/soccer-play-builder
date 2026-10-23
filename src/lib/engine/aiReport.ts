@@ -81,12 +81,18 @@ export interface AiReport {
   marking: { doubled: number; samples: number; unmarkedMean: number; inZoneMean: number }
   /** The closest two team-mates ever actually get, as they move — not as their targets are placed. */
   closest: { d: number; pair: string }
+  /**
+   * Who cuts which lane, split by whether the cutter's own slot is a flank one. `laneWide` is how far off
+   * centre the receiver he picked is; `drift` is how far covering it took him off his own slot x. A winger
+   * doing his job shows a high laneWide and a low drift; dragged infield is the opposite.
+   */
+  cutters: { wide: { n: number; laneWide: number; drift: number }; central: { n: number; laneWide: number; drift: number } }
   width: { width: number; openWing: number; openWingVsWideAttacker: number; nearestToWideAttacker: number }[]
   phase1: { outlets: number; cut: number; cutters: string[]; backLineSpread: number }
 }
 
 /** Walks the seeded play's four defending steps frame by frame, which is as close to real use as a test gets. */
-function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: AiReport['cohesion']; marking: AiReport['marking']; closest: AiReport['closest'] } {
+function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: AiReport['cohesion']; marking: AiReport['marking']; closest: AiReport['closest']; cutters: AiReport['cutters'] } {
   const acc = new Map<string, { n: number; drift: number[]; off: number[]; worst: string }>()
   let assigned = 0
   let onLane = 0
@@ -94,6 +100,7 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
   let worstPair = '-'
   let doubled = 0
   let closest = { d: Infinity, pair: '-' }
+  const cut = { wide: { n: 0, laneWide: 0, drift: 0 }, central: { n: 0, laneWide: 0, drift: 0 } }
   let samples = 0
   let unmarkedTotal = 0
   let inZoneTotal = 0
@@ -130,6 +137,12 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
           assigned++
           const a = players.find((q) => q.id === v.lane)
           if (a && distPointToSegment([v.x, v.y], [ball.x, ball.y], [a.x, a.y]) <= LANE_BLOCK_R) onLane++
+          if (a) {
+            const bucket = Math.abs(home[0] - CENTRE_X) >= 16 ? cut.wide : cut.central
+            bucket.n++
+            bucket.laneWide += Math.abs(a.x - CENTRE_X)
+            bucket.drift += Math.abs(v.x - home[0])
+          }
         }
         if (['line', 'wide', 'screen'].includes(v.role)) {
           for (const n of nb.get(id) ?? []) {
@@ -198,6 +211,10 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
     lanes: { assigned, onLane },
     cohesion: { worstOverstretch, worstPair },
     closest,
+    cutters: {
+      wide: { n: cut.wide.n, laneWide: cut.wide.n ? cut.wide.laneWide / cut.wide.n : 0, drift: cut.wide.n ? cut.wide.drift / cut.wide.n : 0 },
+      central: { n: cut.central.n, laneWide: cut.central.n ? cut.central.laneWide / cut.central.n : 0, drift: cut.central.n ? cut.central.drift / cut.central.n : 0 },
+    },
     marking: { doubled, samples, unmarkedMean: samples ? unmarkedTotal / samples : 0, inZoneMean: samples ? inZoneTotal / samples : 0 },
   }
 }
@@ -241,8 +258,8 @@ function phase1(): AiReport['phase1'] {
 }
 
 export function aiReport(): AiReport {
-  const { roles, lanes, cohesion, marking, closest } = roleCensus()
-  return { roles, lanes, cohesion, marking, closest, width: widthSweep(), phase1: phase1() }
+  const { roles, lanes, cohesion, marking, closest, cutters } = roleCensus()
+  return { roles, lanes, cohesion, marking, closest, cutters, width: widthSweep(), phase1: phase1() }
 }
 
 /** The report as lines of text, for `npm run ai:report`. */
@@ -263,6 +280,11 @@ export function formatAiReport(r: AiReport = aiReport()): string[] {
     `MARKING  ${r.marking.doubled} opponents double-covered within ${DOUBLE_MARK_R} m over ${r.marking.samples} frames ` +
       `(${(r.marking.doubled / r.marking.samples).toFixed(2)} per frame); of ${r.marking.inZoneMean.toFixed(1)} opponents inside the block's area, ` +
       `${r.marking.unmarkedMean.toFixed(1)} have nobody within ${DOUBLE_MARK_R} m`,
+  )
+  out.push(
+    `CUTTERS  flank slots: ${r.cutters.wide.n} cuts, lane ${r.cutters.wide.laneWide.toFixed(1)} m off centre, ` +
+      `${r.cutters.wide.drift.toFixed(1)} m off their own x | central slots: ${r.cutters.central.n} cuts, ` +
+      `lane ${r.cutters.central.laneWide.toFixed(1)} m off centre, ${r.cutters.central.drift.toFixed(1)} m off theirs`,
   )
   out.push(`CLOSEST  two team-mates come within ${r.closest.d.toFixed(2)} m of each other (${r.closest.pair})`)
   out.push('')
