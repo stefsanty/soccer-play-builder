@@ -87,12 +87,14 @@ export interface AiReport {
    * doing his job shows a high laneWide and a low drift; dragged infield is the opposite.
    */
   cutters: { wide: { n: number; laneWide: number; drift: number }; central: { n: number; laneWide: number; drift: number } }
+  /** How often a player's actually-nearest team-mates are not the ones his formation puts beside him. */
+  hood: { wrongMean: number; tier: number; samples: number; worst: string }
   width: { width: number; openWing: number; openWingVsWideAttacker: number; nearestToWideAttacker: number }[]
   phase1: { outlets: number; cut: number; cutters: string[]; backLineSpread: number }
 }
 
 /** Walks the seeded play's four defending steps frame by frame, which is as close to real use as a test gets. */
-function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: AiReport['cohesion']; marking: AiReport['marking']; closest: AiReport['closest']; cutters: AiReport['cutters'] } {
+function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: AiReport['cohesion']; marking: AiReport['marking']; closest: AiReport['closest']; cutters: AiReport['cutters']; hood: AiReport['hood'] } {
   const acc = new Map<string, { n: number; drift: number[]; off: number[]; worst: string }>()
   let assigned = 0
   let onLane = 0
@@ -104,6 +106,7 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
   let samples = 0
   let unmarkedTotal = 0
   let inZoneTotal = 0
+  const hood = { n: 0, wrong: 0, tier: 0, worst: '-' }
 
   for (const stepIdx of [0, 1, 2, 3]) {
     const tl = getTimeline(play, stepIdx)
@@ -164,8 +167,45 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
       const holders = Object.entries(full)
         .filter(([, v]) => ['line', 'wide', 'screen'].includes(v.role))
         .map(([, v]) => v)
+      // Formation neighbourhood: whoever is actually nearest a player, against whoever the FORMATION puts
+      // nearest him. A striker whose closest team-mates have become centre-backs has left his tier, which is
+      // worse than merely being a few metres out of place.
+      {
+        const driven = Object.keys(full).filter((id) => full[id].role !== 'gk')
+        const K = 3
+        for (const id of driven) {
+          const mine = HOME.get(id)!
+          const formation = driven
+            .filter((o) => o !== id)
+            .map((o) => ({ id: o, d: Math.hypot(mine[0] - HOME.get(o)![0], mine[1] - HOME.get(o)![1]) }))
+            .sort((a, b) => a.d - b.d)
+            .slice(0, K)
+            .map((o) => o.id)
+          const actual = driven
+            .filter((o) => o !== id)
+            .map((o) => ({ id: o, d: Math.hypot(full[id].x - full[o].x, full[id].y - full[o].y) }))
+            .sort((a, b) => a.d - b.d)
+            .slice(0, K)
+            .map((o) => o.id)
+          const strangers = actual.filter((o) => !formation.includes(o))
+          hood.n++
+          hood.wrong += strangers.length / K
+          const crossed = strangers.filter((o) => band(o) !== band(id) && (band(o) === 'BACK') !== (band(id) === 'BACK'))
+          if (band(id) === 'FWD' && crossed.some((o) => band(o) === 'BACK')) {
+            hood.tier++
+            hood.worst = `${id} (${band(id)}) nearest: ${actual.map((o) => `${o}:${band(o)}`).join(' ')}`
+          }
+        }
+      }
+
       // how close team-mates actually come to each other as they move
-      const oppIds = players.filter((q) => q.team === 'opp' && !/gk/i.test(q.label)).map((q) => q.id)
+      // Only between two men who are both holding shape. One on a job — pressing, marking, following — is
+      // deliberately allowed closer: he is going to a specific place and is not eased off it. An authored
+      // player is not in `full` at all, which is how he is spotted here.
+      const oppIds = players
+        .filter((q) => q.team === 'opp' && !/gk/i.test(q.label))
+        .filter((q) => full[q.id] && full[q.id].role !== 'presser' && full[q.id].role !== 'cover')
+        .map((q) => q.id)
       for (let i = 0; i < oppIds.length; i++) {
         for (let j = i + 1; j < oppIds.length; j++) {
           const a = players.find((q) => q.id === oppIds[i])!
@@ -211,6 +251,7 @@ function roleCensus(): { roles: RoleRow[]; lanes: AiReport['lanes']; cohesion: A
     lanes: { assigned, onLane },
     cohesion: { worstOverstretch, worstPair },
     closest,
+    hood: { wrongMean: hood.n ? hood.wrong / hood.n : 0, tier: hood.tier, samples: hood.n, worst: hood.worst },
     cutters: {
       wide: { n: cut.wide.n, laneWide: cut.wide.n ? cut.wide.laneWide / cut.wide.n : 0, drift: cut.wide.n ? cut.wide.drift / cut.wide.n : 0 },
       central: { n: cut.central.n, laneWide: cut.central.n ? cut.central.laneWide / cut.central.n : 0, drift: cut.central.n ? cut.central.drift / cut.central.n : 0 },
@@ -258,8 +299,8 @@ function phase1(): AiReport['phase1'] {
 }
 
 export function aiReport(): AiReport {
-  const { roles, lanes, cohesion, marking, closest, cutters } = roleCensus()
-  return { roles, lanes, cohesion, marking, closest, cutters, width: widthSweep(), phase1: phase1() }
+  const { roles, lanes, cohesion, marking, closest, cutters, hood } = roleCensus()
+  return { roles, lanes, cohesion, marking, closest, cutters, hood, width: widthSweep(), phase1: phase1() }
 }
 
 /** The report as lines of text, for `npm run ai:report`. */
@@ -280,6 +321,10 @@ export function formatAiReport(r: AiReport = aiReport()): string[] {
     `MARKING  ${r.marking.doubled} opponents double-covered within ${DOUBLE_MARK_R} m over ${r.marking.samples} frames ` +
       `(${(r.marking.doubled / r.marking.samples).toFixed(2)} per frame); of ${r.marking.inZoneMean.toFixed(1)} opponents inside the block's area, ` +
       `${r.marking.unmarkedMean.toFixed(1)} have nobody within ${DOUBLE_MARK_R} m`,
+  )
+  out.push(
+    `HOOD     ${(100 * r.hood.wrongMean).toFixed(0)}% of a player's 3 nearest team-mates are not his formation neighbours; ` +
+      `${r.hood.tier} tier crossings over ${r.hood.samples} player-frames` + (r.hood.tier ? ` | worst: ${r.hood.worst}` : ''),
   )
   out.push(
     `CUTTERS  flank slots: ${r.cutters.wide.n} cuts, lane ${r.cutters.wide.laneWide.toFixed(1)} m off centre, ` +

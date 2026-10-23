@@ -458,8 +458,13 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
         const dy = b.y - a.y
         const d = Math.hypot(dx, dy)
         if (d >= PERSONAL || d <= 1e-6) continue
+        // A man on a job — pressing the ball, marking or following someone — is not eased off it because a
+        // team-mate has wandered near. He still may not overlap anybody, so the hard check below applies to
+        // him as to everyone; it is only the roomier easing that yields.
+        const onJob = (p: typeof a) => p.rule?.type === 'press' || p.rule?.type === 'mark' || p.rule?.type === 'follow'
+        if (d >= SEPARATION && (onJob(a) || onJob(b))) continue
         // inside SEPARATION they are overlapping and are separated outright; beyond it they merely ease apart
-        const want = (Math.min(PERSONAL, SEPARATION + (PERSONAL - SEPARATION)) - d) / 2
+        const want = (PERSONAL - d) / 2
         const push = d < SEPARATION ? (SEPARATION - d) / 2 : Math.min(want, PERSONAL_V * H)
         a.x -= (dx / d) * push
         a.y -= (dy / d) * push
