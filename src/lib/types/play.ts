@@ -58,7 +58,7 @@ export interface FollowRule {
   handoff?: 'auto' | 'none' | string
 }
 
-export type AiRole = 'auto' | 'presser' | 'cover' | 'support' | 'line' | 'wide' | 'screen' | 'gk'
+export type AiRole = 'auto' | 'presser' | 'cover' | 'support' | 'line' | 'wide' | 'screen' | 'mark' | 'gk'
 
 /**
  * Hand this player to the defensive AI (engine/ai.ts) from `delay`, optionally forcing a role.

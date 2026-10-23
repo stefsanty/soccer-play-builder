@@ -99,7 +99,7 @@ describe('aggressiveness: how defenders break shape to press', () => {
     expect(count(t, 'cover')).toBe(1)
     expect(count(t, 'support')).toBe(0) // nobody else abandons his zone to collapse on the carrier
     // every other player is either holding the block or cutting a passing lane
-    const breaking = Object.values(t).filter((v) => !['line', 'wide', 'screen', 'gk'].includes(v.role))
+    const breaking = Object.values(t).filter((v) => !['line', 'wide', 'screen', 'mark', 'gk'].includes(v.role))
     expect(breaking.map((v) => v.role).sort()).toEqual(['cover', 'presser'])
   })
 
@@ -108,7 +108,11 @@ describe('aggressiveness: how defenders break shape to press', () => {
     const a = at(69)
     const b = at(70)
     expect(Object.values(b).some((v) => v.role === 'presser')).toBe(true)
-    const held = Object.keys(a).filter((id) => a[id].role === 'line' && b[id].role === 'line')
+    // Measured on the men free to squeeze. One going to the ball is placed by that job, and one answering
+    // for an opponent is placed by his man — neither moves because the squeeze arrived, so averaging them
+    // in only dilutes what is being measured.
+    const free = (r: string) => r === 'line' || r === 'wide' || r === 'screen'
+    const held = Object.keys(a).filter((id) => free(a[id].role) && free(b[id].role))
     expect(held.length).toBeGreaterThanOrEqual(3)
     const meanX = (t: typeof a) => held.reduce((s, id) => s + t[id].x, 0) / held.length
     expect(meanX(b)).toBeLessThan(meanX(a) - 0.5) // the ball is on the left, so squeezing lowers x
@@ -240,7 +244,7 @@ describe('line height', () => {
 
   it('the offside line still holds the back line at one height with the new controls', () => {
     const t = computeAiTargets(world({ x: 20, y: 60 }, { owner: 'ours' }), 'opp', emptyStep, { on: true, aggressiveness: 20, lineHeight: 80, width: 70 })
-    const ys = ['oLB', 'oLCB', 'oRCB', 'oRB'].filter((id) => t[id].role === 'line').map((id) => t[id].y)
+    const ys = ['oLB', 'oLCB', 'oRCB', 'oRB'].filter((id) => ['line', 'mark'].includes(t[id].role)).map((id) => t[id].y)
     expect(ys.length).toBeGreaterThanOrEqual(3)
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(1e-9)
   })
