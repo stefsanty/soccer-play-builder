@@ -45,8 +45,12 @@ interface EditorState {
   updateStep: (index: number, update: Partial<PlayStep>) => void
   movePlayer: (playerId: string, toX: number, toY: number, stepIndex: number, endTime?: number) => void
   addPass: (pass: PassAnimation, stepIndex: number) => void
+  removePass: (stepIndex: number, passIndex: number) => void
   updatePass: (stepIndex: number, passIndex: number, update: Partial<PassAnimation>) => void
+  removeMove: (stepIndex: number, playerId: string) => void
   updateMove: (stepIndex: number, playerId: string, update: Partial<PlayerMove>) => void
+  /** Add a hidden "stay in place" move that locks the player out of AI suggestions. */
+  addHold: (stepIndex: number, playerId: string, x: number, y: number) => void
   updatePlayerPosition: (playerId: string, x: number, y: number) => void  // initial position
   /** Merge `patch` into a team's defensive-AI config for a step; keys set to undefined are removed. */
   updateStepAi: (stepIndex: number, team: 'ours' | 'opp', patch: Partial<AiConfig>) => void
@@ -153,16 +157,38 @@ export const useEditorStore = create<EditorState>()(
       s.play.steps[stepIndex].passes.push(pass)
       s.isDirty = true
     }),
+    removePass: (stepIndex, passIndex) => set((s) => {
+      if (!s.play) return
+      s.play.steps[stepIndex]?.passes.splice(passIndex, 1)
+      s.isDirty = true
+    }),
     updatePass: (stepIndex, passIndex, update) => set((s) => {
       if (!s.play) return
       const pass = s.play.steps[stepIndex]?.passes[passIndex]
       if (pass) Object.assign(pass, update)
       s.isDirty = true
     }),
+    removeMove: (stepIndex, playerId) => set((s) => {
+      if (!s.play) return
+      const moves = s.play.steps[stepIndex]?.moves
+      if (!moves) return
+      const idx = moves.findIndex((m) => m.playerId === playerId)
+      if (idx >= 0) moves.splice(idx, 1)
+      s.isDirty = true
+    }),
     updateMove: (stepIndex, playerId, update) => set((s) => {
       if (!s.play) return
       const move = s.play.steps[stepIndex]?.moves.find(m => m.playerId === playerId)
       if (move) Object.assign(move, update)
+      s.isDirty = true
+    }),
+    addHold: (stepIndex, playerId, x, y) => set((s) => {
+      if (!s.play) return
+      const step = s.play.steps[stepIndex]
+      const move: PlayerMove = { playerId, toX: x, toY: y, startTime: 0, endTime: step.duration, hidden: true }
+      const existing = step.moves.findIndex((m) => m.playerId === playerId)
+      if (existing >= 0) step.moves[existing] = move
+      else step.moves.push(move)
       s.isDirty = true
     }),
     updatePlayerPosition: (playerId, x, y) => set((s) => {
