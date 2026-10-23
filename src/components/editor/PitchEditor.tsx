@@ -25,6 +25,8 @@ import { ballHolderAfter, stepChain } from '@/lib/engine/ballHolder'
 import { BALL_OFFSET, getTimeline } from '@/lib/engine/simulator'
 import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
 import { computeAutoMovements, type AISuggestedMove, type PitchState } from '@/lib/engine/attackingAI'
+import { derivePlayerActions, passIndexFromId, playerIdFromRunId, type ActionItem } from '@/lib/engine/actions'
+import { PlayerActionPanel } from './PlayerActionPanel'
 import { haptic } from '@/lib/haptics'
 import { ArrowLeft, Check, CircleDot, Pencil, X } from 'lucide-react'
 
@@ -77,6 +79,9 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   const setPreviewTime = useEditorStore((s) => s.setPreviewTime)
   const updatePass = useEditorStore((s) => s.updatePass)
   const updateMove = useEditorStore((s) => s.updateMove)
+  const removePass = useEditorStore((s) => s.removePass)
+  const removeMove = useEditorStore((s) => s.removeMove)
+  const addHold = useEditorStore((s) => s.addHold)
 
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<{ id: string; moved: boolean; wasSelected: boolean; from: Pos } | null>(null)
@@ -196,6 +201,13 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     [rawSuggestions, dismissedSuggestions],
   )
 
+  // Per-player action queue for the currently selected player.
+  const selectedPlayerQueue = useMemo(() => {
+    if (!selectedPlayerId || !step) return null
+    const all = derivePlayerActions(step)
+    return all.find((q) => q.playerId === selectedPlayerId) ?? { playerId: selectedPlayerId, actions: [] as ActionItem[] }
+  }, [selectedPlayerId, step])
+
   const toMeters = (e: { clientX: number; clientY: number }): Pos | null => {
     const ctm = svgRef.current?.getScreenCTM()?.inverse()
     if (!ctm) return null
@@ -239,6 +251,25 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     addStep()
     haptic(15)
     announce(`Step ${(play?.steps.length ?? 0)} added`)
+  }
+
+  const handleRemoveAction = (actionId: string) => {
+    if (!step) return
+    if (actionId.startsWith('pass:') || actionId.startsWith('recv:')) {
+      removePass(currentStepIndex, passIndexFromId(actionId))
+    } else if (actionId.startsWith('run:')) {
+      removeMove(currentStepIndex, playerIdFromRunId(actionId))
+    }
+    haptic(8)
+  }
+
+  const handleAddHold = () => {
+    if (!selectedPlayerId || !step) return
+    const pos = (prevPositions ?? positions).get(selectedPlayerId)
+    if (!pos) return
+    addHold(currentStepIndex, selectedPlayerId, pos.x, pos.y)
+    haptic(15)
+    announce(`${labelOf(selectedPlayerId)} holding position`)
   }
 
   const onPlayerDown = (e: React.PointerEvent<SVGGElement>, id: string) => {
@@ -659,8 +690,31 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           </div>
         )
       })()}
-      {mode !== 'preview' && !behaviorOpen && !isPlayingAll && (
+      {/* Setup step keeps the old ActionBar for drag-mode affordance */}
+      {mode !== 'preview' && !behaviorOpen && !isPlayingAll && isSetupStep && (
         <ActionBar mode={mode} isSetupStep={isSetupStep} onChangeMode={changeMode} />
+      )}
+      {/* Non-setup, player selected, select mode: per-player queue panel */}
+      {mode !== 'preview' && !behaviorOpen && !isPlayingAll && !isSetupStep && mode === 'select' && selectedPlayerId && selectedPlayerQueue && (
+        <PlayerActionPanel
+          playerLabel={labelOf(selectedPlayerId)}
+          actions={selectedPlayerQueue.actions}
+          labelOf={labelOf}
+          onAddPass={() => changeMode('pass')}
+          onAddRun={() => changeMode('run')}
+          onAddHold={handleAddHold}
+          onRemoveAction={handleRemoveAction}
+          onClose={clearSelection}
+        />
+      )}
+      {/* Non-setup, nothing selected: hint strip */}
+      {mode !== 'preview' && !behaviorOpen && !isPlayingAll && !isSetupStep && !selectedPlayerId && (
+        <div
+          className="flex shrink-0 items-center justify-center border-t border-[var(--app-line)] bg-[var(--app-card)] text-xs text-[var(--app-muted)]"
+          style={{ height: STRIP_HEIGHT }}
+        >
+          Tap a player to add actions
+        </div>
       )}
       {mode !== 'preview' && !behaviorOpen && bottomMode === 'play' && (
         <PlayModeBar onEnterEdit={() => { haptic(10); setPlayingAll(false); setBottomMode('edit') }} />
