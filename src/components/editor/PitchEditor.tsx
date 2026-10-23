@@ -24,6 +24,7 @@ import type { Play } from '@/lib/types/play'
 import { ballHolderAfter, stepChain } from '@/lib/engine/ballHolder'
 import { BALL_OFFSET, getTimeline } from '@/lib/engine/simulator'
 import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
+import { computeAutoMovements, type AISuggestedMove, type PitchState } from '@/lib/engine/attackingAI'
 import { haptic } from '@/lib/haptics'
 import { ArrowLeft, Check, CircleDot, Pencil, X } from 'lucide-react'
 
@@ -96,6 +97,10 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
   >(null)
   useEffect(() => { setSelectedAction(null) }, [currentStepIndex])
 
+  // Attacked AI suggestion state: dismissed IDs are cleared whenever the step changes.
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set())
+  useEffect(() => { setDismissedSuggestions(new Set()) }, [currentStepIndex])
+
   // the Behavior panel (defensive AI controls) takes over the bottom of the screen while it is open
   const [behaviorOpen, setBehaviorOpen] = useState(false)
   useEffect(() => { if (mode === 'preview') setBehaviorOpen(false) }, [mode])
@@ -161,6 +166,36 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     [timeline, currentStepIndex],
   )
 
+  const step = play?.steps[currentStepIndex]
+
+  // Build a pure PitchState snapshot for the attacking AI (step start positions + ball).
+  const attackingPitchState = useMemo((): PitchState | null => {
+    if (!play || !step || currentStepIndex === 0) return null
+    const startPos = prevPositions ?? positions
+    const holderId = ballHolderAfter(play, currentStepIndex - 1)
+    const hpos = holderId ? startPos.get(holderId) : null
+    return {
+      players: play.players.map((p) => {
+        const pos = startPos.get(p.id)
+        return { id: p.id, team: p.team, x: pos?.x ?? p.x, y: pos?.y ?? p.y }
+      }),
+      ball: { x: hpos?.x ?? 34, y: hpos?.y ?? 52, holderId },
+      attackingTeam: 'ours',
+    }
+  }, [play, step, currentStepIndex, prevPositions, positions])
+
+  // Raw suggestions, recomputed whenever step content or positions change.
+  // Only active in select mode so they don't interfere with pass/run gestures.
+  const rawSuggestions = useMemo((): AISuggestedMove[] => {
+    if (!attackingPitchState || !step || mode !== 'select') return []
+    return computeAutoMovements(step, attackingPitchState, new Set())
+  }, [attackingPitchState, step, mode])
+
+  const suggestions = useMemo(
+    () => rawSuggestions.filter((s) => !dismissedSuggestions.has(s.playerId)),
+    [rawSuggestions, dismissedSuggestions],
+  )
+
   const toMeters = (e: { clientX: number; clientY: number }): Pos | null => {
     const ctm = svgRef.current?.getScreenCTM()?.inverse()
     if (!ctm) return null
@@ -169,7 +204,6 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     return { x: clamp(m.x, 0, PITCH_W), y: clamp(m.y, 0, PITCH_H) }
   }
 
-  const step = play?.steps[currentStepIndex]
   const canEdit = mode !== 'preview'
   const isSetupStep = currentStepIndex === 0
 
@@ -346,6 +380,9 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
             <marker id="arrow-run" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0 0L10 5L0 10z" fill="#ffd43b" />
             </marker>
+            <marker id="arrow-suggest" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0L10 5L0 10z" fill="#86efac" />
+            </marker>
           </defs>
           <PitchSurface />
           <PitchMarkings />
@@ -388,6 +425,41 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                 <line x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY} stroke="transparent" strokeWidth={16} />
                 <line x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
                   stroke="white" strokeWidth={3} markerEnd="url(#arrow-pass)" data-testid="pass-arrow" className="arrow-in" />
+              </g>
+            )
+          })}
+
+          {/* AI-suggested movement arrows (dashed green) — tap ✓ to accept, × to dismiss */}
+          {suggestions.map((s) => {
+            const from = (prevPositions ?? positions).get(s.playerId)
+            if (!from) return null
+            const a = mToSvg(from.x, from.y)
+            const b = mToSvg(s.toX, s.toY)
+            const mid = { svgX: (a.svgX + b.svgX) / 2, svgY: (a.svgY + b.svgY) / 2 }
+            const acceptSuggestion = (e: React.MouseEvent) => {
+              e.stopPropagation()
+              movePlayer(s.playerId, s.toX, s.toY, currentStepIndex, s.endTime)
+              announce(`${labelOf(s.playerId)} moved`, { x: s.toX, y: s.toY })
+            }
+            const dismissSuggestion = (e: React.MouseEvent) => {
+              e.stopPropagation()
+              setDismissedSuggestions((prev) => new Set([...prev, s.playerId]))
+            }
+            return (
+              <g key={`sug-${s.playerId}`} data-testid={`suggestion-${s.playerId}`}>
+                <line x1={a.svgX} y1={a.svgY} x2={b.svgX} y2={b.svgY}
+                  stroke="#86efac" strokeWidth={3} strokeDasharray="10 7" opacity={0.55}
+                  markerEnd="url(#arrow-suggest)" pointerEvents="none" />
+                {/* accept chip */}
+                <g style={{ cursor: 'pointer' }} onClick={acceptSuggestion} data-testid={`suggest-accept-${s.playerId}`}>
+                  <ellipse cx={mid.svgX} cy={mid.svgY} rx={26} ry={19} fill="rgba(22,163,74,0.82)" />
+                  <text x={mid.svgX} y={mid.svgY + 5} textAnchor="middle" fontSize={17} fill="white" fontWeight={700} pointerEvents="none">✓</text>
+                </g>
+                {/* dismiss chip */}
+                <g style={{ cursor: 'pointer' }} onClick={dismissSuggestion} data-testid={`suggest-dismiss-${s.playerId}`}>
+                  <circle cx={a.svgX} cy={a.svgY} r={19} fill="rgba(0,0,0,0.52)" />
+                  <text x={a.svgX} y={a.svgY + 5} textAnchor="middle" fontSize={17} fill="#f87171" fontWeight={700} pointerEvents="none">×</text>
+                </g>
               </g>
             )
           })}
