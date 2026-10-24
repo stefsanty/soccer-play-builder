@@ -4,10 +4,12 @@
  * @description Turn-based play builder (/builder): designate a ball carrier in a setup phase, queue
  * passes / dribbles / runs for a turn, then play the turn — all actions animate simultaneously through
  * the step simulator while the full defensive AI (aggression, line height, width, gravity) moves the
- * opposition. Every resolved action becomes a rewind snapshot: ⏪ / ▶️ step through them read-only.
+ * opposition. The attacking AI (engine/attackingAI.ts) suggests support runs and spacing moves as
+ * dashed green arrows — ✓ queues the run, × dismisses it for the turn. Every resolved action becomes
+ * a rewind snapshot: ⏪ / ▶️ step through them read-only.
  * Mobile-first: turn counter top-right, rewind bottom-left, scrollable action queue at the bottom.
  * @props {}
- * @dataDependencies engine/turnBuilder, engine/simulator (simulateStep/sampleTimeline), engine/defaultPlay
+ * @dataDependencies engine/turnBuilder, engine/simulator (simulateStep/sampleTimeline), engine/attackingAI, engine/defaultPlay
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -17,6 +19,7 @@ import type { Play } from '@/lib/types/play'
 import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import { initialState, sampleTimeline, simulateStep, type SimState, type StepTimeline } from '@/lib/engine/simulator'
+import { computeAutoMovements, type PitchState } from '@/lib/engine/attackingAI'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
 import { PitchSurface } from '@/components/editor/PitchSurface'
 import {
@@ -62,6 +65,9 @@ export function BuilderClient() {
   const [flash, setFlash] = useState<string | null>(null)
   const [timeline, setTimeline] = useState<StepTimeline | null>(null)
   const [progress, setProgress] = useState(0)
+  // Attacking-AI suggestions the user has waved away; cleared when a new turn starts.
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
+  useEffect(() => setDismissed(new Set()), [turn])
 
   const svgRef = useRef<SVGSVGElement>(null)
   const actionsRef = useRef<BuilderAction[]>([])
@@ -91,6 +97,23 @@ export function BuilderClient() {
     if (viewSnapshot) return viewSnapshot.positions
     return basePositions
   }, [frame, viewSnapshot, basePositions])
+
+  // Attacking-AI suggestions (engine/attackingAI.ts): recomputed against the queued turn so a queued
+  // pass yields the passer's support run; hidden mid-gesture (a player selected), in history and playback.
+  const suggestions = useMemo(() => {
+    if (!play || phase !== 'plan' || inHistory || selected) return []
+    const draft = turnStep(queue, basePositions, play.steps.length)
+    const holderPos = holder ? basePositions[holder] : null
+    const state: PitchState = {
+      players: play.players.map((p) => {
+        const pos = basePositions[p.id] ?? [p.x, p.y]
+        return { id: p.id, team: p.team, x: pos[0], y: pos[1] }
+      }),
+      ball: { x: holderPos?.[0] ?? PITCH_W / 2, y: holderPos?.[1] ?? PITCH_H / 2, holderId: holder },
+      attackingTeam: 'ours',
+    }
+    return computeAutoMovements(draft, state, new Set()).filter((s) => !dismissed.has(s.playerId))
+  }, [play, phase, inHistory, selected, queue, basePositions, holder, dismissed])
 
   const shownHolder = frame ? frame.ball.holder : viewSnapshot ? viewSnapshot.holder : holder
   const shownBall: Pt | null = frame
@@ -281,6 +304,52 @@ export function BuilderClient() {
         >
           <PitchSurface />
           <PitchMarkings />
+          <defs>
+            <marker id="builder-arrow-suggest" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0L10 5L0 10z" fill="#86efac" />
+            </marker>
+          </defs>
+
+          {/* attacking-AI suggestions (dashed green) — ✓ queues the run, × dismisses it */}
+          {suggestions.map((s) => {
+            const from = basePositions[s.playerId]
+            if (!from) return null
+            const a = pt(from[0], from[1])
+            const b = pt(s.toX, s.toY)
+            const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+            const len = Math.hypot(b.x - a.x, b.y - a.y) || 1
+            // dismiss chip sits beside the arrowhead (empty pitch), not on the player, so it never
+            // steals the player's own tap target
+            const xChip = { x: b.x + (-(b.y - a.y) / len) * 30, y: b.y + ((b.x - a.x) / len) * 30 }
+            return (
+              <g key={`sug-${s.playerId}`} data-testid={`suggestion-${s.playerId}`}>
+                <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#86efac" strokeWidth={3} strokeDasharray="10 7" opacity={0.55} markerEnd="url(#builder-arrow-suggest)" pointerEvents="none" />
+                <g
+                  style={{ cursor: 'pointer' }}
+                  data-testid={`suggest-accept-${s.playerId}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setQueue((q) => queueAction(q, { kind: 'run', playerId: s.playerId, toX: s.toX, toY: s.toY }))
+                    setFlash(`${labelOf(s.playerId)} run queued (AI)`)
+                  }}
+                >
+                  <ellipse cx={mid.x} cy={mid.y} rx={26} ry={19} fill="rgba(22,163,74,0.82)" />
+                  <text x={mid.x} y={mid.y + 5} textAnchor="middle" fontSize={17} fill="white" fontWeight={700} pointerEvents="none">✓</text>
+                </g>
+                <g
+                  style={{ cursor: 'pointer' }}
+                  data-testid={`suggest-dismiss-${s.playerId}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setDismissed((prev) => new Set([...prev, s.playerId]))
+                  }}
+                >
+                  <circle cx={xChip.x} cy={xChip.y} r={19} fill="rgba(0,0,0,0.52)" />
+                  <text x={xChip.x} y={xChip.y + 5} textAnchor="middle" fontSize={17} fill="#f87171" fontWeight={700} pointerEvents="none">×</text>
+                </g>
+              </g>
+            )
+          })}
 
           {/* queued ghost arrows */}
           {!frame &&

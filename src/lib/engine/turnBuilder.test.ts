@@ -27,14 +27,40 @@ describe('allowedKinds', () => {
 })
 
 describe('queueAction', () => {
-  it('replaces an earlier action by the same player', () => {
+  it('replaces an earlier action of the same kind by the same player', () => {
     const q1 = queueAction([], { kind: 'run', playerId: 'a', toX: 10, toY: 10 })
     const q2 = queueAction(q1, { kind: 'run', playerId: 'b', toX: 5, toY: 5 })
     const q3 = queueAction(q2, { kind: 'run', playerId: 'a', toX: 20, toY: 20 })
     expect(q3).toHaveLength(2)
     const a = q3.find((x) => x.playerId === 'a')
     expect(a && a.kind === 'run' && a.toX).toBe(20)
-    expect(q3[q3.length - 1].playerId).toBe('a')
+  })
+  it('lets a passer also carry a support run (pass + run coexist)', () => {
+    const q1 = queueAction([], { kind: 'pass', playerId: 'a', to: 'c' })
+    const q2 = queueAction(q1, { kind: 'run', playerId: 'a', toX: 10, toY: 10 })
+    expect(q2).toHaveLength(2)
+    expect(q2.map((x) => x.kind).sort()).toEqual(['pass', 'run'])
+  })
+  it('a dribble displaces both the pass and the run', () => {
+    const q = queueAction(
+      [
+        { kind: 'pass', playerId: 'a', to: 'c' },
+        { kind: 'run', playerId: 'a', toX: 10, toY: 10 },
+      ],
+      { kind: 'dribble', playerId: 'a', toX: 5, toY: 5 },
+    )
+    expect(q).toHaveLength(1)
+    expect(q[0].kind).toBe('dribble')
+  })
+  it('a pass displaces a dribble but not a run', () => {
+    const q = queueAction(
+      [
+        { kind: 'dribble', playerId: 'a', toX: 5, toY: 5 },
+        { kind: 'run', playerId: 'b', toX: 1, toY: 1 },
+      ],
+      { kind: 'pass', playerId: 'a', to: 'c' },
+    )
+    expect(q.map((x) => x.kind).sort()).toEqual(['pass', 'run'])
   })
 })
 

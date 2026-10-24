@@ -47,9 +47,15 @@ export function allowedKinds(playerId: string, holder: string | null): ActionKin
   return playerId === holder ? ['pass', 'dribble'] : ['run']
 }
 
-/** Add `action` to the queue; a player has one action per turn, so their earlier one is replaced. */
+/** Which of a player's queued actions a new one displaces: a pass conflicts with the ball actions
+ *  (pass/dribble), a run with the movement actions (run/dribble), and a dribble is both — so a passer
+ *  can also carry a support run (the attacking AI suggests exactly that), but never two of a kind. */
+const conflicts = (a: ActionKind, b: ActionKind) =>
+  a === 'dribble' || b === 'dribble' || a === b
+
+/** Add `action` to the queue, displacing whatever it conflicts with for that player. */
 export function queueAction(queue: BuilderAction[], action: BuilderAction): BuilderAction[] {
-  return [...queue.filter((a) => a.playerId !== action.playerId), action]
+  return [...queue.filter((a) => a.playerId !== action.playerId || !conflicts(a.kind, action.kind)), action]
 }
 
 /** Holder once the turn resolves: the pass recipient, else unchanged (dribbles and runs keep it). */
