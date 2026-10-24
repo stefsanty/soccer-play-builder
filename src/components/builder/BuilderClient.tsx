@@ -23,12 +23,15 @@ import { computeAutoMovements, type PitchState } from '@/lib/engine/attackingAI'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
 import { PitchSurface } from '@/components/editor/PitchSurface'
 import {
+  actionInRange,
   actionLabel,
   allowedKinds,
   buildSnapshots,
   holderAfter,
   queueAction,
   turnStep,
+  PASS_RANGE_M,
+  RUN_RANGE_M,
   type BuilderAction,
   type TurnSnapshot,
 } from '@/lib/engine/turnBuilder'
@@ -231,7 +234,12 @@ export function BuilderClient() {
     }
     // A second player tapped: the ball carrier passes; anyone else just can't.
     if (allowedKinds(selected, holder).includes('pass')) {
-      setQueue((q) => queueAction(q, { kind: 'pass', playerId: selected, to: id }))
+      const pass: BuilderAction = { kind: 'pass', playerId: selected, to: id }
+      if (!actionInRange(pass, basePositions)) {
+        setFlash(`Too far — a pass can travel up to ${PASS_RANGE_M}m this turn`)
+        return
+      }
+      setQueue((q) => queueAction(q, pass))
       setSelected(null)
     } else {
       setFlash(`${labelOf(selected)} doesn't have the ball — runs only`)
@@ -244,7 +252,13 @@ export function BuilderClient() {
     const m = toMeters(e)
     if (!m) return
     const kind = allowedKinds(selected, holder).includes('dribble') ? 'dribble' : 'run'
-    setQueue((q) => queueAction(q, { kind, playerId: selected, toX: m[0], toY: m[1] }))
+    const action: BuilderAction = { kind, playerId: selected, toX: m[0], toY: m[1] }
+    // XCOM-style budget: outside the highlighted range the tap is refused, selection kept.
+    if (!actionInRange(action, basePositions)) {
+      setFlash(`Too far — ${labelOf(selected)} can ${kind === 'dribble' ? 'dribble' : 'run'} up to ${RUN_RANGE_M}m this turn`)
+      return
+    }
+    setQueue((q) => queueAction(q, action))
     setSelected(null)
   }
 
@@ -314,8 +328,8 @@ export function BuilderClient() {
           ? 'Playing…'
           : selected
             ? allowedKinds(selected, holder).includes('pass')
-              ? `${labelOf(selected)} has the ball — tap a teammate to pass or the pitch to dribble`
-              : `${labelOf(selected)} — tap the pitch to queue a run`
+              ? `${labelOf(selected)} has the ball — tap a teammate to pass, or dribble inside the highlighted area`
+              : `${labelOf(selected)} — tap inside the highlighted area to queue a run`
             : 'Tap a blue player to select, then queue an action'
 
   return (
@@ -351,7 +365,22 @@ export function BuilderClient() {
             <marker id="builder-arrow-suggest" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0 0L10 5L0 10z" fill="#86efac" />
             </marker>
+            <clipPath id="builder-pitch-clip">
+              <rect x={0} y={0} width={680} height={1050} />
+            </clipPath>
           </defs>
+
+          {/* XCOM-style movement range: the selected player can only move inside this area */}
+          {selected && phase === 'plan' && !inHistory && basePositions[selected] && (() => {
+            const c = pt(basePositions[selected][0], basePositions[selected][1])
+            const r = RUN_RANGE_M * 10
+            return (
+              <g clipPath="url(#builder-pitch-clip)" pointerEvents="none" data-testid="move-range">
+                <circle cx={c.x} cy={c.y} r={r} fill="rgba(76,201,240,0.13)" />
+                <circle cx={c.x} cy={c.y} r={r} fill="none" stroke="rgba(76,201,240,0.55)" strokeWidth={2.5} strokeDasharray="10 8" />
+              </g>
+            )
+          })()}
 
           {/* attacking-AI suggestions (dashed green) — ✓ queues the run, × dismisses it */}
           {suggestions.map((s) => {
@@ -372,7 +401,18 @@ export function BuilderClient() {
                   data-testid={`suggest-accept-${s.playerId}`}
                   onClick={(e) => {
                     e.stopPropagation()
-                    setQueue((q) => queueAction(q, { kind: 'run', playerId: s.playerId, toX: s.toX, toY: s.toY }))
+                    // Suggestions are short, but clamp to the movement budget just in case.
+                    const fp = basePositions[s.playerId]
+                    let tx = s.toX
+                    let ty = s.toY
+                    if (fp) {
+                      const d = Math.hypot(tx - fp[0], ty - fp[1])
+                      if (d > RUN_RANGE_M) {
+                        tx = fp[0] + ((tx - fp[0]) * RUN_RANGE_M) / d
+                        ty = fp[1] + ((ty - fp[1]) * RUN_RANGE_M) / d
+                      }
+                    }
+                    setQueue((q) => queueAction(q, { kind: 'run', playerId: s.playerId, toX: tx, toY: ty }))
                     setFlash(`${labelOf(s.playerId)} run queued (AI)`)
                   }}
                 >

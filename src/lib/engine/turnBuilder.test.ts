@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
+  actionInRange,
   allowedKinds,
   buildSnapshots,
   holderAfter,
   queueAction,
   turnStep,
+  ACTION_MAX_S,
   MIN_TURN_S,
   MOVE_MPS,
   PASS_MPS,
+  PASS_RANGE_M,
+  RUN_RANGE_M,
   TURN_TAIL_S,
   type BuilderAction,
 } from '@/lib/engine/turnBuilder'
@@ -129,6 +133,26 @@ describe('buildSnapshots', () => {
   it('labels and turn metadata are carried', () => {
     expect(snaps[0]).toMatchObject({ turn: 3, actionIndex: 1, actionCount: 2, label: 'a runs' })
     expect(snaps[1].label).toBe('b → a')
+  })
+})
+
+describe('action budget (XCOM-style range limit)', () => {
+  const positions: Record<string, Pt> = { a: [34, 30], b: [34, 90], c: [34, 30 + RUN_RANGE_M - 0.5] }
+
+  it('a run inside the range is allowed, one beyond it is not', () => {
+    expect(actionInRange({ kind: 'run', playerId: 'a', toX: 34, toY: 30 + RUN_RANGE_M - 1 }, positions)).toBe(true)
+    expect(actionInRange({ kind: 'run', playerId: 'a', toX: 34, toY: 30 + RUN_RANGE_M + 1 }, positions)).toBe(false)
+  })
+  it('passes use the longer pass range', () => {
+    expect(PASS_RANGE_M).toBeGreaterThan(RUN_RANGE_M)
+    expect(actionInRange({ kind: 'pass', playerId: 'a', to: 'b' }, positions)).toBe(true) // 60m < 63m
+    const far: Record<string, Pt> = { a: [34, 10], b: [34, 10 + PASS_RANGE_M + 2] }
+    expect(actionInRange({ kind: 'pass', playerId: 'a', to: 'b' }, far)).toBe(false)
+  })
+  it('turnStep clamps any action to the budget, so a turn can never exceed it', () => {
+    const step = turnStep([{ kind: 'run', playerId: 'a', toX: 34, toY: 100 }], positions, 1) // 70m, far out of range
+    expect(step.moves[0].endTime).toBeCloseTo(ACTION_MAX_S)
+    expect(step.duration).toBeLessThanOrEqual(ACTION_MAX_S + TURN_TAIL_S + 1e-9)
   })
 })
 

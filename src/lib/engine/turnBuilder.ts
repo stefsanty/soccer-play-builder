@@ -39,6 +39,11 @@ export interface TurnSnapshot {
 export const PASS_MPS = 18
 export const MOVE_MPS = 6
 export const MIN_ACTION_S = 0.5
+/** XCOM-style action budget: no action may take longer than this, so a turn never exceeds
+ *  ACTION_MAX_S + TURN_TAIL_S. At the paces above that means a 21m run and a 63m pass. */
+export const ACTION_MAX_S = 3.5
+export const RUN_RANGE_M = MOVE_MPS * ACTION_MAX_S
+export const PASS_RANGE_M = PASS_MPS * ACTION_MAX_S
 /** Extra seconds after the last action lands, so the defensive block visibly settles. */
 export const TURN_TAIL_S = 0.8
 export const MIN_TURN_S = 1.6
@@ -72,13 +77,27 @@ export function actionLabel(action: BuilderAction, labelOf: (id: string) => stri
   return `${labelOf(action.playerId)} ${action.kind === 'dribble' ? 'dribbles' : 'runs'}`
 }
 
-/** Seconds an action takes from its player's current spot (distance over the kind's pace). */
+/** How far this kind of action may reach within the turn's time budget. */
+export function actionRange(kind: ActionKind): number {
+  return kind === 'pass' ? PASS_RANGE_M : RUN_RANGE_M
+}
+
+/** Whether the action's travel distance fits the turn's time budget (the UI refuses it otherwise). */
+export function actionInRange(action: BuilderAction, positions: Record<string, Pt>): boolean {
+  const from = positions[action.playerId]
+  if (!from) return false
+  const to: Pt = action.kind === 'pass' ? (positions[action.to] ?? from) : [action.toX, action.toY]
+  return dist(from, to) <= actionRange(action.kind) + 1e-9
+}
+
+/** Seconds an action takes from its player's current spot (distance over the kind's pace),
+ *  clamped to the action budget so an out-of-range action can never stretch the turn. */
 function actionSeconds(action: BuilderAction, positions: Record<string, Pt>): number {
   const from = positions[action.playerId]
   if (!from) return MIN_ACTION_S
   const to: Pt = action.kind === 'pass' ? (positions[action.to] ?? from) : [action.toX, action.toY]
   const mps = action.kind === 'pass' ? PASS_MPS : MOVE_MPS
-  return Math.max(MIN_ACTION_S, dist(from, to) / mps)
+  return Math.min(ACTION_MAX_S, Math.max(MIN_ACTION_S, dist(from, to) / mps))
 }
 
 /**
