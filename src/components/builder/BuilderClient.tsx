@@ -116,10 +116,53 @@ export function BuilderClient() {
   }, [play, phase, inHistory, selected, queue, basePositions, holder, dismissed])
 
   const shownHolder = frame ? frame.ball.holder : viewSnapshot ? viewSnapshot.holder : holder
+
+  // ⏪/▶️ tween the pitch between history states instead of teleporting — an instant flip to a
+  // slightly different arrangement reads as nothing happening.
+  const displayedRef = useRef<Record<string, Pt> | null>(null)
+  const [animPositions, setAnimPositions] = useState<Record<string, Pt> | null>(null)
+  const animRafRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (phase === 'playing') return
+    const from = displayedRef.current
+    const target = historyIdx !== null ? history[historyIdx]?.positions : chain ? positionsOf(chain.state) : null
+    if (!from || !target) return
+    const delta = Math.max(
+      0,
+      ...Object.entries(target).map(([id, tp]) => {
+        const fp = from[id]
+        return fp ? Math.hypot(tp[0] - fp[0], tp[1] - fp[1]) : 0
+      }),
+    )
+    if (delta < 0.05) return
+    if (animRafRef.current !== null) cancelAnimationFrame(animRafRef.current)
+    const t0 = performance.now()
+    const DUR = 400
+    const tick = (now: number) => {
+      const u = Math.min(1, (now - t0) / DUR)
+      const e = 1 - (1 - u) ** 3
+      const mix: Record<string, Pt> = {}
+      for (const [id, tp] of Object.entries(target)) {
+        const fp = from[id] ?? tp
+        mix[id] = [fp[0] + (tp[0] - fp[0]) * e, fp[1] + (tp[1] - fp[1]) * e]
+      }
+      setAnimPositions(u < 1 ? mix : null)
+      if (u < 1) animRafRef.current = requestAnimationFrame(tick)
+    }
+    animRafRef.current = requestAnimationFrame(tick)
+    return () => {
+      if (animRafRef.current !== null) cancelAnimationFrame(animRafRef.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyIdx])
+
+  const renderPositions = !frame && animPositions ? animPositions : shownPositions
+  displayedRef.current = renderPositions
+
   const shownBall: Pt | null = frame
     ? [frame.ball.x, frame.ball.y]
-    : shownHolder && shownPositions[shownHolder]
-      ? shownPositions[shownHolder]
+    : shownHolder && renderPositions[shownHolder]
+      ? renderPositions[shownHolder]
       : null
 
   // ---- playback loop ----
@@ -378,7 +421,7 @@ export function BuilderClient() {
 
           {/* players */}
           {play.players.map((p) => {
-            const pos = shownPositions[p.id] ?? [p.x, p.y]
+            const pos = renderPositions[p.id] ?? [p.x, p.y]
             const c = pt(pos[0], pos[1])
             const isOurs = p.team === 'ours'
             const isSel = selected === p.id
@@ -496,6 +539,9 @@ export function BuilderClient() {
                   >
                     <SkipBack className="size-5" />
                   </button>
+                  <span className="w-9 text-center text-xs font-semibold tabular-nums text-[var(--app-muted)]" data-testid="history-pos">
+                    {(historyIdx ?? history.length - 1) + 1}/{history.length}
+                  </span>
                   <button
                     onClick={forward}
                     disabled={!canForward}

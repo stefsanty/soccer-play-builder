@@ -6,6 +6,8 @@ import {
   queueAction,
   turnStep,
   MIN_TURN_S,
+  MOVE_MPS,
+  PASS_MPS,
   TURN_TAIL_S,
   type BuilderAction,
 } from '@/lib/engine/turnBuilder'
@@ -90,10 +92,10 @@ describe('turnStep', () => {
     expect(step.passes).toHaveLength(1)
     expect(step.moves[0].startTime).toBe(0)
     expect(step.passes[0].startTime).toBe(0)
-    // 20m pass at 40 m/s = 0.5s; 15m run at 15 m/s = 1s
-    expect(step.passes[0].endTime).toBeCloseTo(0.5)
-    expect(step.moves[0].endTime).toBeCloseTo(1)
-    expect(step.duration).toBeCloseTo(Math.max(MIN_TURN_S, 1 + TURN_TAIL_S))
+    // 20m pass and 15m run at the reference-derived paces
+    expect(step.passes[0].endTime).toBeCloseTo(20 / PASS_MPS)
+    expect(step.moves[0].endTime).toBeCloseTo(15 / MOVE_MPS)
+    expect(step.duration).toBeCloseTo(Math.max(MIN_TURN_S, 15 / MOVE_MPS + TURN_TAIL_S))
   })
   it('switches the defensive AI on for the opponent', () => {
     const step = turnStep([{ kind: 'run', playerId: 'b', toX: 30, toY: 60 }], positions, 2)

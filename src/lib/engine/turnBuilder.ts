@@ -33,8 +33,11 @@ export interface TurnSnapshot {
   holder: string | null
 }
 
-export const PASS_MPS = 40 // medium pass, as the editor defaults
-export const MOVE_MPS = 15 // jog, as the editor defaults
+// Paces measured from the reference viewer (pattern-of-play HTML): its passes cover their distance in
+// ~15–19 m/s (RCB→RB 24m in 1.3s) and its runs in ~5–7 m/s (RB's 31m overlap takes 4.3s) — football
+// speeds, not the editor's snappy 40/15 defaults.
+export const PASS_MPS = 18
+export const MOVE_MPS = 6
 export const MIN_ACTION_S = 0.5
 /** Extra seconds after the last action lands, so the defensive block visibly settles. */
 export const TURN_TAIL_S = 0.8
@@ -104,7 +107,9 @@ export function turnStep(actions: BuilderAction[], positions: Record<string, Pt>
     passes,
     defenderRules: {},
     faceTargets: [],
-    ai: { opp: { on: true } },
+    // Near-immediate engagement, pressing readily — the reference's defenders start closing within
+    // half a second of the ball moving; the default 0.4s reaction + mid aggression read as sluggish.
+    ai: { opp: { on: true, aggressiveness: 70, reaction: 0.1 } },
   }
 }
 
