@@ -125,6 +125,19 @@ describe('scheduleTurn', () => {
     expect(s.plans[1].to).toEqual([50, 40]) // pass plan uses c's planned position
   })
 
+  it('an authored delay pushes an action later, but never ahead of its dependencies', () => {
+    const s = scheduleTurn(
+      [
+        { kind: 'run', playerId: 'b', toX: 30, toY: 51, delay: 1.5 }, // free: starts at its delay
+        { kind: 'pass', playerId: 'a', to: 'c' },
+        { kind: 'dribble', playerId: 'c', toX: 50, toY: 42, delay: 0.2 }, // waits for the ball anyway
+      ],
+      positions,
+    )
+    expect(s.moves[0].startTime).toBeCloseTo(1.5)
+    expect(s.moves[1].startTime).toBeCloseTo(20 / PASS_MPS) // max(delay 0.2, ball arrival)
+  })
+
   it('the passer may chain a support run that starts when the ball is released and lands', () => {
     const s = scheduleTurn(
       [

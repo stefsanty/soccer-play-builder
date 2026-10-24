@@ -23,9 +23,9 @@ type Pt = [number, number]
 export type ActionKind = 'pass' | 'dribble' | 'run'
 
 export type BuilderAction =
-  | { kind: 'pass'; playerId: string; to: string }
-  | { kind: 'dribble'; playerId: string; toX: number; toY: number }
-  | { kind: 'run'; playerId: string; toX: number; toY: number }
+  | { kind: 'pass'; playerId: string; to: string; delay?: number }
+  | { kind: 'dribble'; playerId: string; toX: number; toY: number; delay?: number }
+  | { kind: 'run'; playerId: string; toX: number; toY: number; delay?: number }
 
 /** One rewindable moment. `turn` 0 / `actionIndex` 0 is the kick-off snapshot. */
 export interface TurnSnapshot {
@@ -94,6 +94,12 @@ export function actionLabel(action: BuilderAction, labelOf: (id: string) => stri
   return `${labelOf(action.playerId)} ${action.kind === 'dribble' ? 'dribbles' : 'runs'}`
 }
 
+/** Set an action's authored start time (timeline drag), tenth-of-a-second resolution, never negative. */
+export function retimeAction(queue: BuilderAction[], index: number, delay: number): BuilderAction[] {
+  const v = Math.max(0, Math.round(delay * 10) / 10)
+  return queue.map((a, i) => (i === index ? { ...a, delay: v } : a))
+}
+
 /** How far this kind of action may reach within the action budget. */
 export function actionRange(kind: ActionKind): number {
   return kind === 'pass' ? PASS_RANGE_M : RUN_RANGE_M
@@ -145,7 +151,9 @@ export function scheduleTurn(actions: BuilderAction[], startPositions: Record<st
   for (const a of actions) {
     const from = planned[a.playerId]
     if (!from) continue
-    const start = avail[a.playerId] ?? 0
+    // `delay` is an authored start time (the timeline's drag-to-retime); dependencies still win,
+    // so an action can be pushed later but never ahead of its chain or an incoming ball.
+    const start = Math.max(avail[a.playerId] ?? 0, a.delay ?? 0)
     if (a.kind === 'pass') {
       const to = planned[a.to] ?? from
       const end = start + Math.min(ACTION_MAX_S, Math.max(MIN_ACTION_S, dist(from, to) / PASS_MPS))
