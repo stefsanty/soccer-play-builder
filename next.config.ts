@@ -10,6 +10,12 @@ const { version } = JSON.parse(
 
 const nextConfig: NextConfig = {
   env: { NEXT_PUBLIC_APP_VERSION: version },
+  async redirects() {
+    return [
+      // Queue-and-play prototype: a self-contained static page served from public/.
+      { source: "/demo", destination: "/demo.html", permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Play builder — queue and play prototype</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#ede9e3;font-family:system-ui,sans-serif;padding:1rem;display:flex;justify-content:center}
+.w{width:100%;max-width:500px}
+.sb{font-size:12px;color:#555;background:#fff;border:1px solid #d8d5cf;border-bottom:none;border-radius:8px 8px 0 0;padding:7px 12px}
+.pitch-wrap{overflow:hidden;line-height:0}
+svg{display:block;width:100%;cursor:default}
+svg.pick{cursor:crosshair}
+.qp{background:#fff;border:1px solid #d8d5cf;border-radius:0 0 10px 10px;padding:12px 14px}
+.ql-hdr{font-size:11px;font-weight:600;color:#aaa;letter-spacing:.04em;text-transform:uppercase;margin-bottom:8px}
+.ql{display:flex;flex-wrap:wrap;gap:6px;min-height:34px;align-items:center}
+.chip{display:flex;align-items:center;gap:5px;background:#f3f1ea;border:1px solid #d8d5cf;border-radius:5px;padding:4px 9px;font-size:12px;color:#333}
+.cdot{width:7px;height:7px;border-radius:50%;background:#1a68d0;flex-shrink:0}
+.cx{cursor:pointer;color:#bbb;font-size:14px;line-height:1;margin-left:2px}
+.cx:hover{color:#c00}
+.empty{font-size:12px;color:#ccc}
+.btns{display:flex;gap:8px;margin-top:10px}
+.pbtn{flex:1;padding:10px;background:#1a68d0;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}
+.pbtn:disabled{background:#b8c3ce;cursor:not-allowed}
+.pbtn:not(:disabled):hover{background:#1458ad}
+.clr{padding:10px 16px;background:#f3f1ea;border:1px solid #d8d5cf;border-radius:8px;font-size:12px;cursor:pointer;color:#666}
+.clr:hover{background:#e8e4dc}
+.turn{font-size:11px;color:#aaa;margin-top:8px;text-align:right}
+</style>
+</head>
+<body>
+<div class="w">
+  <div class="sb" id="sb">Planning — tap a blue player to select, then tap the pitch to queue a run or tap a teammate to pass</div>
+  <div class="pitch-wrap">
+    <svg id="sv" viewBox="0 0 480 310"></svg>
+  </div>
+  <div class="qp">
+    <div class="ql-hdr">Action queue</div>
+    <div class="ql" id="ql"><span class="empty">No actions queued</span></div>
+    <div class="btns">
+      <button class="pbtn" id="pbtn" disabled>▶  Play</button>
+      <button class="clr" id="cbtn">Clear</button>
+    </div>
+    <div class="turn" id="turn">Turn 1</div>
+  </div>
+</div>
+<script>
+(function(){
+const NS='http://www.w3.org/2000/svg';
+const sv=document.getElementById('sv');
+function mk(tag,a){const e=document.createElementNS(NS,tag);for(const[k,v]of Object.entries(a||{}))e.setAttribute(k,v);return e;}
+
+function drawField(){
+  [mk('rect',{x:0,y:0,width:480,height:310,fill:'#2d7a30'}),
+   mk('rect',{x:16,y:14,width:448,height:282,fill:'none',stroke:'rgba(255,255,255,.45)','stroke-width':'1.5'}),
+   mk('line',{x1:16,y1:155,x2:464,y2:155,stroke:'rgba(255,255,255,.36)','stroke-width':'1'}),
+   mk('circle',{cx:240,cy:155,r:36,fill:'none',stroke:'rgba(255,255,255,.36)','stroke-width':'1'}),
+   mk('circle',{cx:240,cy:155,r:2.5,fill:'rgba(255,255,255,.4)'}),
+   mk('rect',{x:110,y:14,width:260,height:72,fill:'none',stroke:'rgba(255,255,255,.28)','stroke-width':'1'}),
+   mk('rect',{x:110,y:224,width:260,height:72,fill:'none',stroke:'rgba(255,255,255,.28)','stroke-width':'1'}),
+   mk('rect',{x:168,y:14,width:144,height:29,fill:'none',stroke:'rgba(255,255,255,.2)','stroke-width':'1'}),
+   mk('rect',{x:168,y:267,width:144,height:29,fill:'none',stroke:'rgba(255,255,255,.2)','stroke-width':'1'}),
+   mk('circle',{cx:240,cy:62,r:2,fill:'rgba(255,255,255,.38)'}),
+   mk('circle',{cx:240,cy:248,r:2,fill:'rgba(255,255,255,.38)'}),
+   mk('line',{x1:192,y1:14,x2:288,y2:14,stroke:'rgba(255,255,255,.62)','stroke-width':'3'}),
+   mk('line',{x1:192,y1:296,x2:288,y2:296,stroke:'rgba(255,255,255,.62)','stroke-width':'3'}),
+  ].forEach(e=>sv.appendChild(e));
+}
+
+const INIT={
+  gk:{x:240,y:280,lb:'GK',t:'o',i:0},rb:{x:390,y:240,lb:'RB',t:'o',i:0},
+  cb1:{x:295,y:255,lb:'CB',t:'o',i:0},cb2:{x:185,y:255,lb:'CB',t:'o',i:0},lb:{x:90,y:240,lb:'LB',t:'o',i:0},
+  cdm:{x:240,y:212,lb:'CDM',t:'o',i:1},lcm:{x:158,y:188,lb:'LCM',t:'o',i:1},
+  rcm:{x:322,y:188,lb:'RCM',t:'o',i:1},lw:{x:74,y:128,lb:'LW',t:'o',i:1},
+  st:{x:240,y:105,lb:'ST',t:'o',i:1},rw:{x:410,y:128,lb:'RW',t:'o',i:1},
+  ogk:{x:240,y:30,lb:'GK',t:'d',i:0},orb:{x:395,y:75,lb:'RB',t:'d',i:0},
+  ocb1:{x:295,y:58,lb:'CB',t:'d',i:0},ocb2:{x:185,y:58,lb:'CB',t:'d',i:0},
+  olb:{x:84,y:75,lb:'LB',t:'d',i:0},ocm1:{x:158,y:132,lb:'CM',t:'d',i:0},
+  ocm2:{x:240,y:120,lb:'CM',t:'d',i:0},ocm3:{x:322,y:132,lb:'CM',t:'d',i:0},
+  ost:{x:240,y:172,lb:'ST',t:'d',i:0},
+};
+
+let pos={},pEls={},sel=null,queue=[],mode='plan',turn=1;
+const ghostL=mk('g'),hlL=mk('g'),oppL=mk('g'),ourL=mk('g');
+const ballEl=mk('circle',{r:5.5,fill:'#f5e030',stroke:'rgba(0,0,0,.32)','stroke-width':'1.2'});
+
+function resetPos(){pos={};for(const[id,p]of Object.entries(INIT))pos[id]={...p};}
+
+function setPos(id,x,y){
+  const pe=pEls[id];if(!pe)return;
+  pe.c.setAttribute('cx',x);pe.c.setAttribute('cy',y);
+  pe.t.setAttribute('x',x);pe.t.setAttribute('y',y+1.5);
+  pos[id].x=x;pos[id].y=y;
+}
+function setBall(x,y){ballEl.setAttribute('cx',x);ballEl.setAttribute('cy',y);}
+
+function drawPlayers(){
+  while(ourL.firstChild)ourL.removeChild(ourL.firstChild);
+  while(oppL.firstChild)oppL.removeChild(oppL.firstChild);
+  pEls={};
+  for(const[id,p]of Object.entries(pos)){
+    const layer=p.t==='o'?ourL:oppL;
+    const fill=p.t==='o'?'#1a68d0':'#ba2323';
+    const op=(!p.i&&p.t==='o')?'0.6':'1';
+    const g=mk('g');
+    const c=mk('circle',{cx:p.x,cy:p.y,r:10,fill,stroke:'rgba(255,255,255,.65)','stroke-width':'1',opacity:op});
+    const t=mk('text',{x:p.x,y:p.y+1.5,'text-anchor':'middle','dominant-baseline':'middle',
+      fill:'#fff','font-size':'6.8','font-weight':'600','font-family':'system-ui',opacity:op});
+    t.textContent=p.lb;
+    g.appendChild(c);g.appendChild(t);
+    if(p.i&&p.t==='o'){
+      g.style.cursor='pointer';
+      g.addEventListener('click',e=>{e.stopPropagation();onPl(id);});
+    }
+    layer.appendChild(g);pEls[id]={c,t,g};
+  }
+}
+
+function setHL(id){
+  while(hlL.firstChild)hlL.removeChild(hlL.firstChild);
+  if(!id)return;
+  const p=pos[id];
+  hlL.appendChild(mk('circle',{cx:p.x,cy:p.y,r:15,fill:'none',stroke:'#f5e030','stroke-width':'2.5',opacity:'.92'}));
+}
+
+function redrawGhosts(){
+  while(ghostL.firstChild)ghostL.removeChild(ghostL.firstChild);
+  for(const a of queue){
+    const fp=pos[a.id];
+    const tx=a.type==='run'?a.tx:pos[a.to].x;
+    const ty=a.type==='run'?a.ty:pos[a.to].y;
+    const col='rgba(255,215,40,.72)';
+    ghostL.appendChild(mk('line',{x1:fp.x,y1:fp.y,x2:tx,y2:ty,
+      stroke:col,'stroke-width':'1.6','stroke-dasharray':'7,4'}));
+    const d=Math.sqrt((tx-fp.x)**2+(ty-fp.y)**2)||1;
+    const ux=(tx-fp.x)/d,uy=(ty-fp.y)/d,r=11,w=5;
+    ghostL.appendChild(mk('polyline',{
+      points:`${tx-ux*r-uy*w},${ty-uy*r+ux*w} ${tx},${ty} ${tx-ux*r+uy*w},${ty-uy*r-ux*w}`,
+      fill:'none',stroke:col,'stroke-width':'1.6','stroke-linejoin':'round'}));
+    ghostL.appendChild(mk('circle',{cx:tx,cy:ty,r:10,fill:'none',
+      stroke:'rgba(255,215,40,.45)','stroke-width':'1.5','stroke-dasharray':'3,2'}));
+  }
+}
+
+function redrawQueue(){
+  const ql=document.getElementById('ql');ql.innerHTML='';
+  if(!queue.length){ql.innerHTML='<span class="empty">No actions queued</span>';
+    document.getElementById('pbtn').disabled=true;return;}
+  document.getElementById('pbtn').disabled=false;
+  queue.forEach((a,i)=>{
+    const ch=document.createElement('div');ch.className='chip';
+    const dot=document.createElement('div');dot.className='cdot';
+    const lbl=document.createElement('span');
+    lbl.textContent=a.type==='run'?`${a.id.toUpperCase()} runs`:`${a.id.toUpperCase()} → ${a.to.toUpperCase()}`;
+    const x=document.createElement('span');x.className='cx';x.textContent='×';
+    x.onclick=()=>{queue.splice(i,1);redrawQueue();redrawGhosts();};
+    ch.appendChild(dot);ch.appendChild(lbl);ch.appendChild(x);ql.appendChild(ch);
+  });
+}
+
+function setSB(msg){document.getElementById('sb').textContent=msg;}
+
+function onPl(id){
+  if(mode!=='plan')return;
+  if(sel===id){sel=null;setHL(null);sv.classList.remove('pick');
+    setSB('Planning — tap a blue player to select');return;}
+  if(sel&&pos[sel].i&&id!==sel){
+    queue.push({id:sel,type:'pass',to:id});
+    sel=null;setHL(null);sv.classList.remove('pick');
+    redrawGhosts();redrawQueue();
+    setSB('Planning — tap a blue player to select');return;}
+  sel=id;setHL(id);sv.classList.add('pick');
+  setSB(`${id.toUpperCase()} selected — tap pitch to queue a run, or tap a teammate to pass`);
+}
+
+sv.addEventListener('click',e=>{
+  if(mode!=='plan'||!sel)return;
+  const r=sv.getBoundingClientRect();
+  const tx=Math.max(26,Math.min(454,(e.clientX-r.left)/r.width*480));
+  const ty=Math.max(24,Math.min(285,(e.clientY-r.top)/r.height*310));
+  queue.push({id:sel,type:'run',tx,ty});
+  sel=null;setHL(null);sv.classList.remove('pick');
+  redrawGhosts();redrawQueue();
+  setSB('Planning — tap a blue player to select');
+});
+
+function computeOppReact(){
+  const react={};const used=new Set();
+  for(const a of queue){
+    const tx=a.type==='run'?a.tx:pos[a.to].x;
+    const ty=a.type==='run'?a.ty:pos[a.to].y;
+    let best=null,bd=Infinity;
+    for(const[id,p]of Object.entries(pos)){
+      if(p.t!=='d'||id==='ogk'||used.has(id))continue;
+      const d=Math.sqrt((p.x-tx)**2+(p.y-ty)**2);
+      if(d<bd){bd=d;best=id;}
+    }
+    if(best&&bd<200){
+      used.add(best);
+      const op=pos[best];
+      react[best]={x:op.x+(tx-op.x)*0.52,y:op.y+(ty-op.y)*0.52};
+    }
+  }
+  return react;
+}
+
+function lerp(a,b,t){return a+(b-a)*t;}
+function ease(t){return t<0.5?2*t*t:-1+(4-2*t)*t;}
+
+document.getElementById('pbtn').addEventListener('click',()=>{
+  if(mode!=='plan'||!queue.length)return;
+  mode='playing';
+  document.getElementById('pbtn').disabled=true;
+  document.getElementById('cbtn').disabled=true;
+  setSB('Playing…');
+  while(ghostL.firstChild)ghostL.removeChild(ghostL.firstChild);
+  setHL(null);
+
+  const ourEnd={};
+  let ballTx=null,ballTy=null;
+  for(const a of queue){
+    if(a.type==='run'){ourEnd[a.id]={x:a.tx,y:a.ty};
+      if(ballTx===null){ballTx=a.tx;ballTy=a.ty;}}
+    else{const tp=pos[a.to];ourEnd[a.to]={x:tp.x,y:tp.y};
+      ballTx=tp.x;ballTy=tp.y;}
+  }
+  const oppEnd=computeOppReact();
+
+  const starts={};
+  for(const id of [...Object.keys(ourEnd),...Object.keys(oppEnd)]){
+    starts[id]={x:pos[id].x,y:pos[id].y};
+  }
+  const bs={x:+ballEl.getAttribute('cx'),y:+ballEl.getAttribute('cy')};
+  if(ballTx===null){ballTx=bs.x;ballTy=bs.y;}
+
+  const DUR=1900,t0=performance.now();
+  (function frame(now){
+    const raw=Math.min((now-t0)/DUR,1),t=ease(raw);
+    for(const[id,end]of Object.entries(ourEnd)){const s=starts[id];setPos(id,lerp(s.x,end.x,t),lerp(s.y,end.y,t));}
+    for(const[id,end]of Object.entries(oppEnd)){const s=starts[id];setPos(id,lerp(s.x,end.x,t),lerp(s.y,end.y,t));}
+    setBall(lerp(bs.x,ballTx,t),lerp(bs.y,ballTy,t));
+    if(raw<1)requestAnimationFrame(frame);
+    else{
+      turn++;queue=[];mode='plan';
+      document.getElementById('pbtn').disabled=true;
+      document.getElementById('cbtn').disabled=false;
+      document.getElementById('turn').textContent=`Turn ${turn}`;
+      redrawQueue();redrawGhosts();
+      setSB('Planning — tap a blue player to select, then tap the pitch to assign a move');
+    }
+  })(t0);
+});
+
+document.getElementById('cbtn').addEventListener('click',()=>{
+  queue=[];sel=null;setHL(null);sv.classList.remove('pick');
+  redrawQueue();redrawGhosts();setSB('Planning — tap a blue player to select');
+});
+
+drawField();
+sv.appendChild(ghostL);sv.appendChild(hlL);sv.appendChild(oppL);sv.appendChild(ourL);sv.appendChild(ballEl);
+resetPos();drawPlayers();setBall(pos.cdm.x,pos.cdm.y);redrawQueue();
+})();
+</script>
+</body>
+</html>
