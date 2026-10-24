@@ -5,6 +5,8 @@ import {
   buildSnapshots,
   holderAfter,
   queueAction,
+  sanitizeQueue,
+  scheduleTurn,
   turnStep,
   ACTION_MAX_S,
   MIN_TURN_S,
@@ -23,7 +25,7 @@ type Pt = [number, number]
 const id = (s: string) => s
 
 describe('allowedKinds', () => {
-  it('ball carrier may pass or dribble, never run', () => {
+  it('the (projected) ball carrier may pass or dribble, never run', () => {
     expect(allowedKinds('a', 'a')).toEqual(['pass', 'dribble'])
   })
   it('everyone else may only run', () => {
@@ -32,113 +34,125 @@ describe('allowedKinds', () => {
   })
 })
 
-describe('queueAction', () => {
-  it('replaces an earlier action of the same kind by the same player', () => {
+describe('queueAction + chaining', () => {
+  it('appends — a player may chain several actions', () => {
     const q1 = queueAction([], { kind: 'run', playerId: 'a', toX: 10, toY: 10 })
-    const q2 = queueAction(q1, { kind: 'run', playerId: 'b', toX: 5, toY: 5 })
-    const q3 = queueAction(q2, { kind: 'run', playerId: 'a', toX: 20, toY: 20 })
-    expect(q3).toHaveLength(2)
-    const a = q3.find((x) => x.playerId === 'a')
-    expect(a && a.kind === 'run' && a.toX).toBe(20)
-  })
-  it('lets a passer also carry a support run (pass + run coexist)', () => {
-    const q1 = queueAction([], { kind: 'pass', playerId: 'a', to: 'c' })
-    const q2 = queueAction(q1, { kind: 'run', playerId: 'a', toX: 10, toY: 10 })
+    const q2 = queueAction(q1, { kind: 'run', playerId: 'a', toX: 20, toY: 20 })
     expect(q2).toHaveLength(2)
-    expect(q2.map((x) => x.kind).sort()).toEqual(['pass', 'run'])
+    expect(q2.every((x) => x.playerId === 'a')).toBe(true)
   })
-  it('a dribble displaces both the pass and the run', () => {
-    const q = queueAction(
-      [
-        { kind: 'pass', playerId: 'a', to: 'c' },
-        { kind: 'run', playerId: 'a', toX: 10, toY: 10 },
-      ],
-      { kind: 'dribble', playerId: 'a', toX: 5, toY: 5 },
-    )
-    expect(q).toHaveLength(1)
-    expect(q[0].kind).toBe('dribble')
-  })
-  it('a pass displaces a dribble but not a run', () => {
-    const q = queueAction(
-      [
-        { kind: 'dribble', playerId: 'a', toX: 5, toY: 5 },
-        { kind: 'run', playerId: 'b', toX: 1, toY: 1 },
-      ],
-      { kind: 'pass', playerId: 'a', to: 'c' },
-    )
-    expect(q.map((x) => x.kind).sort()).toEqual(['pass', 'run'])
+})
+
+describe('sanitizeQueue', () => {
+  it('drops ball actions whose owner would not hold the ball at that point', () => {
+    const q: BuilderAction[] = [
+      { kind: 'pass', playerId: 'a', to: 'b' },
+      { kind: 'run', playerId: 'c', toX: 1, toY: 1 },
+      { kind: 'pass', playerId: 'b', to: 'c' },
+      { kind: 'dribble', playerId: 'c', toX: 2, toY: 2 },
+    ]
+    // removing the first pass leaves b never receiving: b's pass and c's dribble fall away, runs stay
+    const withoutFirst = sanitizeQueue(q.slice(1), 'a')
+    expect(withoutFirst).toEqual([{ kind: 'run', playerId: 'c', toX: 1, toY: 1 }])
+    // the intact chain is untouched
+    expect(sanitizeQueue(q, 'a')).toEqual(q)
   })
 })
 
 describe('holderAfter', () => {
-  const run: BuilderAction = { kind: 'run', playerId: 'b', toX: 1, toY: 1 }
-  const dribble: BuilderAction = { kind: 'dribble', playerId: 'a', toX: 2, toY: 2 }
-  it('transfers on a pass', () => {
-    expect(holderAfter('a', [run, { kind: 'pass', playerId: 'a', to: 'c' }])).toBe('c')
-  })
-  it('keeps the holder on runs and dribbles', () => {
-    expect(holderAfter('a', [run, dribble])).toBe('a')
+  it('follows the last pass through a chain', () => {
+    expect(
+      holderAfter('a', [
+        { kind: 'pass', playerId: 'a', to: 'b' },
+        { kind: 'pass', playerId: 'b', to: 'c' },
+      ]),
+    ).toBe('c')
+    expect(holderAfter('a', [{ kind: 'dribble', playerId: 'a', toX: 2, toY: 2 }])).toBe('a')
   })
 })
 
-describe('turnStep', () => {
+describe('scheduleTurn', () => {
   const positions: Record<string, Pt> = { a: [30, 30], b: [30, 45], c: [50, 30] }
-  it('maps dribbles/runs to moves and the pass to a pass, all starting at 0', () => {
-    const step = turnStep(
+
+  it('first actions of different players start together at 0', () => {
+    const s = scheduleTurn(
       [
         { kind: 'pass', playerId: 'a', to: 'c' },
         { kind: 'run', playerId: 'b', toX: 30, toY: 60 },
       ],
       positions,
-      1,
     )
-    expect(step.moves).toHaveLength(1)
-    expect(step.passes).toHaveLength(1)
-    expect(step.moves[0].startTime).toBe(0)
-    expect(step.passes[0].startTime).toBe(0)
-    // 20m pass and 15m run at the reference-derived paces
-    expect(step.passes[0].endTime).toBeCloseTo(20 / PASS_MPS)
-    expect(step.moves[0].endTime).toBeCloseTo(15 / MOVE_MPS)
-    expect(step.duration).toBeCloseTo(Math.max(MIN_TURN_S, 15 / MOVE_MPS + TURN_TAIL_S))
+    expect(s.passes[0].startTime).toBe(0)
+    expect(s.moves[0].startTime).toBe(0)
+    expect(s.passes[0].endTime).toBeCloseTo(20 / PASS_MPS)
+    expect(s.moves[0].endTime).toBeCloseTo(15 / MOVE_MPS)
   })
-  it('switches the defensive AI on for the opponent', () => {
-    const step = turnStep([{ kind: 'run', playerId: 'b', toX: 30, toY: 60 }], positions, 2)
-    expect(step.ai?.opp?.on).toBe(true)
-    expect(step.ai?.ours).toBeUndefined()
+
+  it("a player's own actions run back to back, departing from the previous target", () => {
+    const s = scheduleTurn(
+      [
+        { kind: 'run', playerId: 'b', toX: 30, toY: 51 }, // 6m → 1s
+        { kind: 'run', playerId: 'b', toX: 30, toY: 63 }, // 12m → 2s
+      ],
+      positions,
+    )
+    expect(s.moves[1].startTime).toBeCloseTo(1)
+    expect(s.moves[1].endTime).toBeCloseTo(3)
+    expect(s.plans[1].from).toEqual([30, 51])
+    expect(s.planned.b).toEqual([30, 63])
+  })
+
+  it('an action queued after a pass to that player waits for the ball to arrive', () => {
+    const s = scheduleTurn(
+      [
+        { kind: 'pass', playerId: 'a', to: 'c' }, // 20m → 1.111s
+        { kind: 'dribble', playerId: 'c', toX: 50, toY: 42 },
+      ],
+      positions,
+    )
+    expect(s.moves[0].startTime).toBeCloseTo(20 / PASS_MPS)
+  })
+
+  it('a run queued before the incoming pass starts at once, and the pass aims at the planned spot', () => {
+    const s = scheduleTurn(
+      [
+        { kind: 'run', playerId: 'c', toX: 50, toY: 40 },
+        { kind: 'pass', playerId: 'a', to: 'c' },
+      ],
+      positions,
+    )
+    expect(s.moves[0].startTime).toBe(0)
+    expect(s.plans[1].to).toEqual([50, 40]) // pass plan uses c's planned position
+  })
+
+  it('the passer may chain a support run that starts when the ball is released and lands', () => {
+    const s = scheduleTurn(
+      [
+        { kind: 'pass', playerId: 'a', to: 'c' },
+        { kind: 'run', playerId: 'a', toX: 36, toY: 36 },
+      ],
+      positions,
+    )
+    expect(s.moves[0].startTime).toBeCloseTo(s.passes[0].endTime)
   })
 })
 
-describe('buildSnapshots', () => {
-  const start: Record<string, Pt> = { a: [10, 10], b: [20, 20], d: [30, 30] }
-  const end: Record<string, Pt> = { a: [10, 20], b: [20, 30], d: [30, 40] } // d = defender moved by the AI
-  const actions: BuilderAction[] = [
-    { kind: 'run', playerId: 'a', toX: 10, toY: 20 },
-    { kind: 'pass', playerId: 'b', to: 'a' },
-  ]
-  const snaps = buildSnapshots(3, actions, start, end, 'b', id)
-
-  it('one snapshot per action, last one equal to the turn end state', () => {
-    expect(snaps).toHaveLength(2)
-    expect(snaps[1].positions).toEqual(end)
+describe('turnStep', () => {
+  const positions: Record<string, Pt> = { a: [30, 30], b: [30, 45] }
+  it('wraps the schedule with the settle tail and switches the opponent AI on', () => {
+    const step = turnStep([{ kind: 'run', playerId: 'b', toX: 30, toY: 60 }], positions, 2)
+    expect(step.duration).toBeCloseTo(Math.max(MIN_TURN_S, 15 / MOVE_MPS + TURN_TAIL_S))
+    expect(step.ai?.opp?.on).toBe(true)
+    expect(step.ai?.ours).toBeUndefined()
   })
-  it('earlier snapshots land only the earlier movers and interpolate the rest', () => {
-    expect(snaps[0].positions.a).toEqual([10, 20]) // action 1 landed
-    expect(snaps[0].positions.b).toEqual([20, 20]) // action 2 not yet
-    expect(snaps[0].positions.d).toEqual([30, 35]) // defender halfway (1/2)
-  })
-  it('the holder flips on the pass snapshot', () => {
-    expect(snaps[0].holder).toBe('b')
-    expect(snaps[1].holder).toBe('a')
-  })
-  it('labels and turn metadata are carried', () => {
-    expect(snaps[0]).toMatchObject({ turn: 3, actionIndex: 1, actionCount: 2, label: 'a runs' })
-    expect(snaps[1].label).toBe('b → a')
+  it('clamps any single action to the budget', () => {
+    const step = turnStep([{ kind: 'run', playerId: 'a', toX: 30, toY: 100 }], positions, 1) // 70m
+    expect(step.moves[0].endTime).toBeCloseTo(ACTION_MAX_S)
   })
 })
 
 describe('action budget (XCOM-style range limit)', () => {
-  const positions: Record<string, Pt> = { a: [34, 30], b: [34, 90], c: [34, 30 + RUN_RANGE_M - 0.5] }
-
+  const positions: Record<string, Pt> = { a: [34, 30], b: [34, 90] }
   it('a run inside the range is allowed, one beyond it is not', () => {
     expect(actionInRange({ kind: 'run', playerId: 'a', toX: 34, toY: 30 + RUN_RANGE_M - 1 }, positions)).toBe(true)
     expect(actionInRange({ kind: 'run', playerId: 'a', toX: 34, toY: 30 + RUN_RANGE_M + 1 }, positions)).toBe(false)
@@ -149,10 +163,33 @@ describe('action budget (XCOM-style range limit)', () => {
     const far: Record<string, Pt> = { a: [34, 10], b: [34, 10 + PASS_RANGE_M + 2] }
     expect(actionInRange({ kind: 'pass', playerId: 'a', to: 'b' }, far)).toBe(false)
   })
-  it('turnStep clamps any action to the budget, so a turn can never exceed it', () => {
-    const step = turnStep([{ kind: 'run', playerId: 'a', toX: 34, toY: 100 }], positions, 1) // 70m, far out of range
-    expect(step.moves[0].endTime).toBeCloseTo(ACTION_MAX_S)
-    expect(step.duration).toBeLessThanOrEqual(ACTION_MAX_S + TURN_TAIL_S + 1e-9)
+})
+
+describe('buildSnapshots', () => {
+  const start: Record<string, Pt> = { a: [10, 10], b: [20, 20], d: [30, 30] }
+  const end: Record<string, Pt> = { a: [10, 20], b: [20, 30], d: [30, 40] } // d = defender moved by the AI
+  const actions: BuilderAction[] = [
+    { kind: 'run', playerId: 'a', toX: 10, toY: 20 },
+    { kind: 'pass', playerId: 'b', to: 'a' },
+  ]
+  const { plans } = scheduleTurn(actions, start)
+  const snaps = buildSnapshots(3, plans, start, end, 'b', id)
+
+  it('one snapshot per action, last one equal to the turn end state', () => {
+    expect(snaps).toHaveLength(2)
+    expect(snaps[1].positions).toEqual(end)
+  })
+  it('earlier snapshots land only the earlier movers and interpolate the defenders', () => {
+    expect(snaps[0].positions.a).toEqual([10, 20]) // action 1 landed
+    expect(snaps[0].positions.d).toEqual([30, 35]) // defender halfway (1/2)
+  })
+  it('the holder flips on the pass snapshot', () => {
+    expect(snaps[0].holder).toBe('b')
+    expect(snaps[1].holder).toBe('a')
+  })
+  it('labels and turn metadata are carried', () => {
+    expect(snaps[0]).toMatchObject({ turn: 3, actionIndex: 1, actionCount: 2, label: 'a runs' })
+    expect(snaps[1].label).toBe('b → a')
   })
 })
 
@@ -172,35 +209,67 @@ describe('turn resolution through the simulator', () => {
     )
     play.steps.push({ ...step, index: 1 })
 
-    const start = initialState(play)
-    const hp = positions[holder]
-    const tl = simulateStep(play, 1, start, holder, hp)
+    const tl = simulateStep(play, 1, initialState(play), holder, positions[holder])
     const last = tl.frames.at(-1)!
-
-    // pass completed: holder is the receiver, ball at their feet
     expect(last.ball.holder).toBe(receiver)
-    expect(Math.hypot(last.ball.x - last.players[receiver].x, last.ball.y - last.players[receiver].y)).toBeLessThan(3)
-    // the run arrived
     expect(last.players['o-LM'].x).toBeCloseTo(12, 0)
     expect(last.players['o-LM'].y).toBeCloseTo(55, 0)
-    // the defensive AI moved the opposition block
     const oppMoved = play.players
       .filter((p) => p.team === 'opp')
       .map((p) => Math.hypot(last.players[p.id].x - p.x, last.players[p.id].y - p.y))
     expect(Math.max(...oppMoved)).toBeGreaterThan(2)
   })
 
-  it('a dribble carries the ball with the holder even with no pass in the play', () => {
+  it('a chained receiver waits for the ball, then dribbles on — tween chains hold in the simulator', () => {
     const play = createDefaultPlay()
-    const holder = 'o-RCM'
+    const holder = 'o-LCM'
+    const receiver = 'o-RST'
     const positions = Object.fromEntries(play.players.map((p) => [p.id, [p.x, p.y] as Pt]))
-    const step = turnStep([{ kind: 'dribble', playerId: holder, toX: 43, toY: 50 }], positions, 1)
+    const target: Pt = [40, 56]
+    const step = turnStep(
+      [
+        { kind: 'pass', playerId: holder, to: receiver },
+        { kind: 'dribble', playerId: receiver, toX: target[0], toY: target[1] },
+      ],
+      positions,
+      1,
+    )
+    expect(step.moves[0].startTime).toBeCloseTo(step.passes[0].endTime) // waits to receive
     play.steps.push({ ...step, index: 1 })
 
     const tl = simulateStep(play, 1, initialState(play), holder, positions[holder])
+    // before the pass lands the receiver has not left
+    const early = tl.frames[Math.round((step.passes[0].endTime * 0.9) / (1 / 60))]
+    expect(Math.hypot(early.players[receiver].x - positions[receiver][0], early.players[receiver].y - positions[receiver][1])).toBeLessThan(1)
+    // at the end they carried the ball to the dribble target
     const last = tl.frames.at(-1)!
-    expect(last.players[holder].y).toBeCloseTo(50, 0)
-    expect(last.ball.holder).toBe(holder)
-    expect(Math.hypot(last.ball.x - last.players[holder].x, last.ball.y - last.players[holder].y)).toBeLessThan(3)
+    expect(last.players[receiver].x).toBeCloseTo(target[0], 0)
+    expect(last.players[receiver].y).toBeCloseTo(target[1], 0)
+    expect(last.ball.holder).toBe(receiver)
+    expect(Math.hypot(last.ball.x - last.players[receiver].x, last.ball.y - last.players[receiver].y)).toBeLessThan(3)
+  })
+
+  it('a two-run chain by one player follows both segments', () => {
+    const play = createDefaultPlay()
+    const holder = 'o-LCM'
+    const positions = Object.fromEntries(play.players.map((p) => [p.id, [p.x, p.y] as Pt]))
+    // o-RM starts at (58, 36): up the line, then cut inside
+    const step = turnStep(
+      [
+        { kind: 'run', playerId: 'o-RM', toX: 58, toY: 50 },
+        { kind: 'run', playerId: 'o-RM', toX: 48, toY: 56 },
+      ],
+      positions,
+      1,
+    )
+    play.steps.push({ ...step, index: 1 })
+    const tl = simulateStep(play, 1, initialState(play), holder, positions[holder])
+    // mid-chain: at the first segment's end the player is at its target
+    const atSeg1 = tl.frames[Math.round(step.moves[0].endTime / (1 / 60))]
+    expect(atSeg1.players['o-RM'].x).toBeCloseTo(58, 0)
+    expect(atSeg1.players['o-RM'].y).toBeCloseTo(50, 0)
+    const last = tl.frames.at(-1)!
+    expect(last.players['o-RM'].x).toBeCloseTo(48, 0)
+    expect(last.players['o-RM'].y).toBeCloseTo(56, 0)
   })
 })

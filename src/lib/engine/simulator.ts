@@ -214,11 +214,29 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
   const ids = Object.keys(st)
   for (const id of ids) st[id].fol = newFollowTrack() // trackers and cooldowns are per step
 
-  const tweens = new Map<string, Tween>()
-  for (const m of step.moves as PlayerMove[]) {
+  // A player may have several moves in one step (the turn builder chains them); they run in
+  // startTime order, each segment departing from the previous one's target. The editor authors at
+  // most one move per player per step, so single-segment behaviour is unchanged.
+  const tweens = new Map<string, Tween[]>()
+  for (const m of [...(step.moves as PlayerMove[])].sort((a, b) => a.startTime - b.startTime)) {
     const from = st[m.playerId]
     if (!from) continue
-    tweens.set(m.playerId, { fx: from.x, fy: from.y, tx: m.toX, ty: m.toY, t0: m.startTime, t1: m.endTime, a: m.easeFraction ?? 0.25, via: m.via })
+    const chain = tweens.get(m.playerId) ?? []
+    const prev = chain.at(-1)
+    const fx = prev ? prev.tx : from.x
+    const fy = prev ? prev.ty : from.y
+    chain.push({ fx, fy, tx: m.toX, ty: m.toY, t0: m.startTime, t1: m.endTime, a: m.easeFraction ?? 0.25, via: m.via })
+    tweens.set(m.playerId, chain)
+  }
+  /** Position along a player's move chain at time `t`: holds the start before the first segment,
+   *  the previous target between segments, and the final target after the last one. */
+  const evalChain = (chain: Tween[], t: number): { x: number; y: number } => {
+    let q = { x: chain[0].fx, y: chain[0].fy }
+    for (const tw of chain) {
+      if (t < tw.t0) break
+      q = evalTw(tw, t)
+    }
+    return q
   }
 
   const faceQueue: FaceTarget[] = [...step.faceTargets].sort((a, b) => a.at - b.at)
@@ -382,11 +400,11 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
   for (let k = 0; k <= n; k++) {
     const t = k * H
 
-    // 1. our authored moves (any player with a move follows its tween)
+    // 1. our authored moves (any player with a move follows its tween chain)
     const moved = new Set<string>()
     for (const [id, tw] of tweens) {
       const p = st[id]
-      const q = evalTw(tw, t)
+      const q = evalChain(tw, t)
       p.vx = (q.x - p.x) / H
       p.vy = (q.y - p.y) / H
       p.x = q.x

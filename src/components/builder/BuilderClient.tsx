@@ -1,12 +1,15 @@
 'use client'
 
 /**
- * @description Turn-based play builder (/builder): designate a ball carrier in a setup phase, queue
- * passes / dribbles / runs for a turn, then play the turn — all actions animate simultaneously through
- * the step simulator while the full defensive AI (aggression, line height, width, gravity) moves the
- * opposition. The attacking AI (engine/attackingAI.ts) suggests support runs and spacing moves as
- * dashed green arrows — ✓ queues the run, × dismisses it for the turn. Every resolved action becomes
- * a rewind snapshot: ⏪ / ▶️ step through them read-only.
+ * @description Turn-based play builder (/builder): designate a ball carrier in a setup phase, then
+ * queue CHAINS of actions — passes, dribbles and runs scheduled back to back per player, with a
+ * receiver's later actions waiting for the ball to arrive. Possession gating follows the projected
+ * holder through the chain, so after queueing LCM → RST, RST can queue what happens once he receives.
+ * Taps beyond the XCOM-style movement range are capped to the range boundary (max-distance run).
+ * Preview plays the queued turn without committing it; Play resolves it through the step simulator
+ * with the full defensive AI, and the attacking AI (engine/attackingAI.ts) suggests support runs as
+ * dashed green arrows (✓ queues, × dismisses). Every resolved action becomes a rewind snapshot:
+ * ⏪ / ▶️ tween through them read-only with a position indicator.
  * Mobile-first: turn counter top-right, rewind bottom-left, scrollable action queue at the bottom.
  * @props {}
  * @dataDependencies engine/turnBuilder, engine/simulator (simulateStep/sampleTimeline), engine/attackingAI, engine/defaultPlay
@@ -14,7 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, CircleDot, Play as PlayIcon, SkipBack, SkipForward, Trash2, X } from 'lucide-react'
+import { ArrowLeft, CircleDot, Eye, Play as PlayIcon, SkipBack, SkipForward, Square, Trash2, X } from 'lucide-react'
 import type { Play } from '@/lib/types/play'
 import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
@@ -29,15 +32,18 @@ import {
   buildSnapshots,
   holderAfter,
   queueAction,
+  sanitizeQueue,
+  scheduleTurn,
   turnStep,
   PASS_RANGE_M,
   RUN_RANGE_M,
+  type ActionPlan,
   type BuilderAction,
   type TurnSnapshot,
 } from '@/lib/engine/turnBuilder'
 
 type Pt = [number, number]
-type Phase = 'setup' | 'plan' | 'playing'
+type Phase = 'setup' | 'plan' | 'playing' | 'preview'
 
 const OURS = '#2f8cff'
 const OPP = '#e5484d'
@@ -73,7 +79,11 @@ export function BuilderClient() {
   useEffect(() => setDismissed(new Set()), [turn])
 
   const svgRef = useRef<SVGSVGElement>(null)
-  const actionsRef = useRef<BuilderAction[]>([])
+  const plansRef = useRef<ActionPlan[]>([])
+  // The play including the running turn's step; only committed when a real Play finishes (not Preview).
+  const pendingPlayRef = useRef<Play | null>(null)
+
+  const running = phase === 'playing' || phase === 'preview'
 
   useEffect(() => {
     if (!flash) return
@@ -93,8 +103,15 @@ export function BuilderClient() {
   const inHistory = historyIdx !== null
   const viewSnapshot = inHistory ? history[historyIdx] : null
 
+  // The queued chain laid out in time: ghost arrows come from its plans and the range disc / gating
+  // from its planned (post-move) positions, so a second queued run departs from the first one's target.
+  const schedule = useMemo(() => (phase === 'plan' && !inHistory ? scheduleTurn(queue, basePositions) : null), [phase, inHistory, queue, basePositions])
+  const planned = schedule?.planned ?? basePositions
+  // Who will hold the ball once the queue so far has run — gating follows this through the chain.
+  const projectedHolder = holderAfter(holder, queue)
+
   // What the pitch shows right now: playback frame > history snapshot > planning state.
-  const frame = timeline && phase === 'playing' ? sampleTimeline(timeline, progress * timeline.duration) : null
+  const frame = timeline && running ? sampleTimeline(timeline, progress * timeline.duration) : null
   const shownPositions = useMemo<Record<string, Pt>>(() => {
     if (frame) return Object.fromEntries(Object.entries(frame.players).map(([id, p]) => [id, [p.x, p.y] as Pt]))
     if (viewSnapshot) return viewSnapshot.positions
@@ -126,7 +143,7 @@ export function BuilderClient() {
   const [animPositions, setAnimPositions] = useState<Record<string, Pt> | null>(null)
   const animRafRef = useRef<number | null>(null)
   useEffect(() => {
-    if (phase === 'playing') return
+    if (running) return
     const from = displayedRef.current
     const target = historyIdx !== null ? history[historyIdx]?.positions : chain ? positionsOf(chain.state) : null
     if (!from || !target) return
@@ -168,9 +185,9 @@ export function BuilderClient() {
       ? renderPositions[shownHolder]
       : null
 
-  // ---- playback loop ----
+  // ---- playback loop (Play commits on completion, Preview just returns to planning) ----
   useEffect(() => {
-    if (phase !== 'playing' || !timeline || !play) return
+    if (!running || !timeline || !play) return
     let raf = 0
     let last: number | null = null
     let p = 0
@@ -183,18 +200,27 @@ export function BuilderClient() {
         raf = requestAnimationFrame(tick)
         return
       }
-      // Turn resolved: commit end state, holder, per-action snapshots.
-      const actions = actionsRef.current
+      if (phase === 'preview') {
+        setTimeline(null)
+        setProgress(0)
+        setPhase('plan')
+        return
+      }
+      // Turn resolved: commit the step, end state, holder and per-action snapshots.
+      const plans = plansRef.current
+      const actions = plans.map((pl) => pl.action)
       const startPositions = positionsOf(timeline.start)
       const endPositions = positionsOf(timeline.end)
       const lastBall = timeline.frames.at(-1)?.ball
       const nextHolder = holderAfter(holder, actions)
+      if (pendingPlayRef.current) setPlay(pendingPlayRef.current)
+      pendingPlayRef.current = null
       setChain({
         state: timeline.end,
         ball: lastBall ? [lastBall.x, lastBall.y] : (endPositions[nextHolder ?? ''] ?? [PITCH_W / 2, PITCH_H / 2]),
         holder: nextHolder ?? '',
       })
-      setHistory((h) => [...h, ...buildSnapshots(turn, actions, startPositions, endPositions, holder, labelOf)])
+      setHistory((h) => [...h, ...buildSnapshots(turn, plans, startPositions, endPositions, holder, labelOf)])
       setHolder(nextHolder)
       setTurn((t) => t + 1)
       setQueue([])
@@ -203,7 +229,7 @@ export function BuilderClient() {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [phase, timeline, play, holder, turn, labelOf])
+  }, [running, phase, timeline, play, holder, turn, labelOf])
 
   // ---- interactions ----
   const toMeters = (e: { clientX: number; clientY: number }): Pt | null => {
@@ -216,7 +242,7 @@ export function BuilderClient() {
   }
 
   const onPlayerTap = (id: string) => {
-    if (phase === 'playing' || inHistory || !play) return
+    if (running || inHistory || !play) return
     const player = play.players.find((p) => p.id === id)
     if (!player || player.team !== 'ours') return
 
@@ -232,17 +258,17 @@ export function BuilderClient() {
       setSelected(null)
       return
     }
-    // A second player tapped: the ball carrier passes; anyone else just can't.
-    if (allowedKinds(selected, holder).includes('pass')) {
+    // A second player tapped: the projected ball carrier passes; anyone else just can't.
+    if (allowedKinds(selected, projectedHolder).includes('pass')) {
       const pass: BuilderAction = { kind: 'pass', playerId: selected, to: id }
-      if (!actionInRange(pass, basePositions)) {
-        setFlash(`Too far — a pass can travel up to ${PASS_RANGE_M}m this turn`)
+      if (!actionInRange(pass, planned)) {
+        setFlash(`Too far — a pass can travel up to ${PASS_RANGE_M}m`)
         return
       }
       setQueue((q) => queueAction(q, pass))
       setSelected(null)
     } else {
-      setFlash(`${labelOf(selected)} doesn't have the ball — runs only`)
+      setFlash(`${labelOf(selected)} won't have the ball — runs only`)
       setSelected(id)
     }
   }
@@ -251,14 +277,17 @@ export function BuilderClient() {
     if (phase !== 'plan' || inHistory || !selected) return
     const m = toMeters(e)
     if (!m) return
-    const kind = allowedKinds(selected, holder).includes('dribble') ? 'dribble' : 'run'
-    const action: BuilderAction = { kind, playerId: selected, toX: m[0], toY: m[1] }
-    // XCOM-style budget: outside the highlighted range the tap is refused, selection kept.
-    if (!actionInRange(action, basePositions)) {
-      setFlash(`Too far — ${labelOf(selected)} can ${kind === 'dribble' ? 'dribble' : 'run'} up to ${RUN_RANGE_M}m this turn`)
-      return
+    const kind = allowedKinds(selected, projectedHolder).includes('dribble') ? 'dribble' : 'run'
+    const from = planned[selected] ?? basePositions[selected]
+    if (!from) return
+    // A tap beyond the highlighted range becomes a maximum-distance move toward that spot.
+    let to: Pt = m
+    const d = Math.hypot(m[0] - from[0], m[1] - from[1])
+    if (d > RUN_RANGE_M) {
+      to = [from[0] + ((m[0] - from[0]) * RUN_RANGE_M) / d, from[1] + ((m[1] - from[1]) * RUN_RANGE_M) / d]
+      setFlash(`Max range — ${labelOf(selected)} ${kind === 'dribble' ? 'dribbles' : 'runs'} ${Math.round(RUN_RANGE_M)}m toward it`)
     }
-    setQueue((q) => queueAction(q, action))
+    setQueue((q) => queueAction(q, { kind, playerId: selected, toX: to[0], toY: to[1] }))
     setSelected(null)
   }
 
@@ -277,7 +306,8 @@ export function BuilderClient() {
     setPhase('plan')
   }
 
-  const playTurn = () => {
+  /** Simulate the queued turn; `commit: false` is Preview (nothing persists when it ends). */
+  const beginTurn = (commit: boolean) => {
     if (!play || queue.length === 0 || phase !== 'plan' || inHistory) return
     const stepIndex = play.steps.length
     const step = turnStep(queue, basePositions, stepIndex)
@@ -285,12 +315,18 @@ export function BuilderClient() {
     const start = chain ? chain.state : initialState(nextPlay)
     const startBall: Pt = chain ? chain.ball : (basePositions[holder ?? ''] ?? [PITCH_W / 2, PITCH_H / 2])
     const tl = simulateStep(nextPlay, stepIndex, start, holder, startBall)
-    actionsRef.current = queue
-    setPlay(nextPlay)
+    plansRef.current = scheduleTurn(queue, basePositions).plans
+    pendingPlayRef.current = commit ? nextPlay : null
     setSelected(null)
     setTimeline(tl)
     setProgress(0)
-    setPhase('playing')
+    setPhase(commit ? 'playing' : 'preview')
+  }
+
+  const cancelPreview = () => {
+    setTimeline(null)
+    setProgress(0)
+    setPhase('plan')
   }
 
   // ---- rewind ----
@@ -309,12 +345,6 @@ export function BuilderClient() {
 
   if (!play) return <div className="flex h-dvh items-center justify-center bg-[var(--app-bg)]" />
 
-  const queuedTargets = queue.map((a) => {
-    const from = basePositions[a.playerId]
-    const to: Pt = a.kind === 'pass' ? (basePositions[a.to] ?? from) : [a.toX, a.toY]
-    return { a, from, to }
-  })
-
   const status =
     phase === 'setup'
       ? holder
@@ -326,11 +356,13 @@ export function BuilderClient() {
           : `History — Turn ${viewSnapshot.turn}, action ${viewSnapshot.actionIndex}/${viewSnapshot.actionCount}: ${viewSnapshot.label}`
         : phase === 'playing'
           ? 'Playing…'
-          : selected
-            ? allowedKinds(selected, holder).includes('pass')
-              ? `${labelOf(selected)} has the ball — tap a teammate to pass, or dribble inside the highlighted area`
-              : `${labelOf(selected)} — tap inside the highlighted area to queue a run`
-            : 'Tap a blue player to select, then queue an action'
+          : phase === 'preview'
+            ? 'Previewing — nothing is committed'
+            : selected
+              ? allowedKinds(selected, projectedHolder).includes('pass')
+                ? `${labelOf(selected)} ${selected === holder ? 'has' : 'will have'} the ball — tap a teammate to pass, or the pitch to dribble`
+                : `${labelOf(selected)} — tap the pitch to queue a run (beyond the area = max-distance run)`
+              : 'Tap a blue player to select; actions chain in queue order'
 
   return (
     <div className="flex h-dvh flex-col bg-[var(--app-bg)] text-[#e8edf2]">
@@ -370,9 +402,10 @@ export function BuilderClient() {
             </clipPath>
           </defs>
 
-          {/* XCOM-style movement range: the selected player can only move inside this area */}
-          {selected && phase === 'plan' && !inHistory && basePositions[selected] && (() => {
-            const c = pt(basePositions[selected][0], basePositions[selected][1])
+          {/* XCOM-style movement range, centred on where the chain leaves the selected player */}
+          {selected && phase === 'plan' && !inHistory && (planned[selected] ?? basePositions[selected]) && (() => {
+            const p0 = planned[selected] ?? basePositions[selected]
+            const c = pt(p0[0], p0[1])
             const r = RUN_RANGE_M * 10
             return (
               <g clipPath="url(#builder-pitch-clip)" pointerEvents="none" data-testid="move-range">
@@ -384,7 +417,7 @@ export function BuilderClient() {
 
           {/* attacking-AI suggestions (dashed green) — ✓ queues the run, × dismisses it */}
           {suggestions.map((s) => {
-            const from = basePositions[s.playerId]
+            const from = planned[s.playerId] ?? basePositions[s.playerId]
             if (!from) return null
             const a = pt(from[0], from[1])
             const b = pt(s.toX, s.toY)
@@ -402,7 +435,7 @@ export function BuilderClient() {
                   onClick={(e) => {
                     e.stopPropagation()
                     // Suggestions are short, but clamp to the movement budget just in case.
-                    const fp = basePositions[s.playerId]
+                    const fp = planned[s.playerId] ?? basePositions[s.playerId]
                     let tx = s.toX
                     let ty = s.toY
                     if (fp) {
@@ -434,19 +467,18 @@ export function BuilderClient() {
             )
           })}
 
-          {/* queued ghost arrows */}
+          {/* queued ghost arrows — one per scheduled action, chained segments included */}
           {!frame &&
             !inHistory &&
-            queuedTargets.map(({ a, from, to }, i) => {
-              if (!from) return null
+            schedule?.plans.map(({ action, from, to }, i) => {
               const f = pt(from[0], from[1])
               const t = pt(to[0], to[1])
               const d = Math.hypot(t.x - f.x, t.y - f.y) || 1
               const ux = (t.x - f.x) / d
               const uy = (t.y - f.y) / d
               return (
-                <g key={`${a.playerId}-${i}`} pointerEvents="none">
-                  <line x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke={GHOST} strokeWidth={3} strokeDasharray={a.kind === 'pass' ? '4 8' : '12 8'} />
+                <g key={`${action.playerId}-${i}`} pointerEvents="none">
+                  <line x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke={GHOST} strokeWidth={3} strokeDasharray={action.kind === 'pass' ? '4 8' : '12 8'} />
                   <polyline
                     points={`${t.x - ux * 18 - uy * 9},${t.y - uy * 18 + ux * 9} ${t.x},${t.y} ${t.x - ux * 18 + uy * 9},${t.y - uy * 18 - ux * 9}`}
                     fill="none"
@@ -454,7 +486,7 @@ export function BuilderClient() {
                     strokeWidth={3}
                     strokeLinejoin="round"
                   />
-                  {a.kind !== 'pass' && <circle cx={t.x} cy={t.y} r={16} fill="none" stroke={GHOST} strokeWidth={2.5} strokeDasharray="5 4" />}
+                  {action.kind !== 'pass' && <circle cx={t.x} cy={t.y} r={16} fill="none" stroke={GHOST} strokeWidth={2.5} strokeDasharray="5 4" />}
                 </g>
               )
             })}
@@ -466,7 +498,7 @@ export function BuilderClient() {
             const isOurs = p.team === 'ours'
             const isSel = selected === p.id
             const isHolder = shownHolder === p.id
-            const tappable = isOurs && phase !== 'playing' && !inHistory
+            const tappable = isOurs && !running && !inHistory
             return (
               <g
                 key={p.id}
@@ -523,6 +555,13 @@ export function BuilderClient() {
             </div>
           </div>
         )}
+        {phase === 'preview' && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+            <div className="rounded-full border border-[var(--app-accent)]/40 bg-[rgba(11,16,21,0.9)] px-4 py-1.5 text-xs font-semibold text-[var(--app-accent)]">
+              Preview — tap Stop to go back to planning
+            </div>
+          </div>
+        )}
       </div>
 
       {/* bottom panel: status, queue, controls */}
@@ -552,10 +591,11 @@ export function BuilderClient() {
                     key={`${a.playerId}-${i}`}
                     className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--app-line)] bg-[var(--app-chip)] px-2.5 py-1.5 text-xs font-semibold"
                   >
+                    <span className="text-[10px] text-[var(--app-muted)]">{i + 1}</span>
                     {a.kind !== 'run' && <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />}
                     {actionLabel(a, labelOf)}
                     <button
-                      onClick={() => setQueue((q) => q.filter((_, j) => j !== i))}
+                      onClick={() => setQueue((q) => sanitizeQueue(q.filter((_, j) => j !== i), holder))}
                       aria-label={`Remove ${actionLabel(a, labelOf)}`}
                       className="-mr-1 flex size-5 items-center justify-center rounded text-[var(--app-muted)] hover:text-red-400"
                     >
@@ -594,7 +634,17 @@ export function BuilderClient() {
                 </div>
               )}
               <button
-                onClick={playTurn}
+                onClick={() => (phase === 'preview' ? cancelPreview() : beginTurn(false))}
+                disabled={phase === 'playing' || inHistory || (phase === 'plan' && queue.length === 0)}
+                aria-label={phase === 'preview' ? 'Stop preview' : 'Preview the queued turn'}
+                data-testid="preview-turn"
+                className="flex h-12 touch-manipulation items-center justify-center gap-1.5 rounded-[14px] border border-[var(--app-line)] bg-[var(--app-bg)] px-3.5 text-sm font-semibold text-[var(--app-muted)] transition-all duration-100 active:scale-95 disabled:opacity-35"
+              >
+                {phase === 'preview' ? <Square className="size-4" /> : <Eye className="size-4" />}
+                {phase === 'preview' ? 'Stop' : 'Preview'}
+              </button>
+              <button
+                onClick={() => beginTurn(true)}
                 disabled={queue.length === 0 || phase !== 'plan' || inHistory}
                 data-testid="play-turn"
                 className="flex h-12 flex-1 touch-manipulation items-center justify-center gap-2 rounded-[14px] bg-[var(--app-accent)] text-base font-bold text-[var(--app-accent-ink)] transition-all duration-100 active:scale-[0.97] disabled:opacity-40"
