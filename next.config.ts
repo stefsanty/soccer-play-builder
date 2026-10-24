@@ -13,7 +13,7 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       // Queue-and-play prototype: a self-contained static page served from public/.
-      { source: "/demo", destination: "/demo.html", permanent: false },
+      { source: "/test", destination: "/test.html", permanent: false },
     ];
   },
 };
