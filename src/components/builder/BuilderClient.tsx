@@ -22,7 +22,8 @@ import { ArrowLeft, CircleDot, Eye, Play as PlayIcon, SkipBack, SkipForward, Squ
 import type { Play } from '@/lib/types/play'
 import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
-import { initialState, sampleTimeline, simulateStep, type PlayerState, type SimState, type StepTimeline } from '@/lib/engine/simulator'
+import { H, initialState, sampleTimeline, simulateStep, type PlayerState, type SimState, type StepTimeline } from '@/lib/engine/simulator'
+import { GOAL_CENTRE_X, GOAL_HALF_W, GOAL_LINE_Y, NET_DEPTH_M, detectGoal } from '@/lib/engine/goal'
 import { newFollowTrack } from '@/lib/engine/follow'
 import { computeAutoMovements, type PitchState } from '@/lib/engine/attackingAI'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
@@ -62,6 +63,13 @@ const BLOCK_COLORS: Record<string, string> = {
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+/** Confetti pieces for the GOAL! banner — fixed layout so the burst looks the same every time. */
+const CONFETTI = Array.from({ length: 28 }, (_, i) => ({
+  left: (i * 37) % 100,
+  delay: ((i * 7) % 10) / 10,
+  dur: 1.6 + ((i * 3) % 5) / 5,
+  color: ['#ffd43b', '#2f8cff', '#86efac', '#f87171', '#ffffff'][i % 5],
+}))
 const pt = (x: number, y: number) => {
   const s = mToSvg(x, y)
   return { x: s.svgX, y: s.svgY }
@@ -102,6 +110,9 @@ export function BuilderClient() {
   const [history, setHistory] = useState<TurnSnapshot[]>([])
   const [historyIdx, setHistoryIdx] = useState<number | null>(null)
   const [flash, setFlash] = useState<string | null>(null)
+  // Goals scored so far (header chip) and the GOAL! banner, shown the moment the ball crosses the line.
+  const [score, setScore] = useState(0)
+  const [goalBanner, setGoalBanner] = useState<{ turn: number; preview: boolean } | null>(null)
   const [timeline, setTimeline] = useState<StepTimeline | null>(null)
   const [progress, setProgress] = useState(0)
   // Timeline scrubber: 0..1 through the queued (draft) turn; null = not scrubbing.
@@ -118,6 +129,9 @@ export function BuilderClient() {
   const plansRef = useRef<ActionPlan[]>([])
   // The play including the running turn's step; only committed when a real Play finishes (not Preview).
   const pendingPlayRef = useRef<Play | null>(null)
+  // Second at which the running turn's ball crosses into the goal (null = no goal this turn).
+  const goalAtRef = useRef<number | null>(null)
+  const goalShownRef = useRef(false)
 
   const running = phase === 'playing' || phase === 'preview'
 
@@ -126,6 +140,13 @@ export function BuilderClient() {
     const t = setTimeout(() => setFlash(null), 2200)
     return () => clearTimeout(t)
   }, [flash])
+
+  // The banner lingers until tapped, or a few seconds after the turn finishes playing.
+  useEffect(() => {
+    if (!goalBanner || running) return
+    const t = setTimeout(() => setGoalBanner(null), 3000)
+    return () => clearTimeout(t)
+  }, [goalBanner, running])
 
   const labelOf = useCallback((id: string) => play?.players.find((p) => p.id === id)?.label ?? id, [play])
 
@@ -250,6 +271,11 @@ export function BuilderClient() {
       last = now
       p = Math.min(1, p + dt / timeline.duration)
       setProgress(p)
+      if (goalAtRef.current !== null && !goalShownRef.current && p * timeline.duration >= goalAtRef.current) {
+        goalShownRef.current = true
+        setGoalBanner({ turn, preview: phase === 'preview' })
+        if (phase === 'playing') setScore((n) => n + 1)
+      }
       if (p < 1) {
         raf = requestAnimationFrame(tick)
         return
@@ -292,7 +318,11 @@ export function BuilderClient() {
     if (!svg || !ctm) return null
     const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm)
     const m = svgToFullM(p.x, p.y)
-    return [clamp(m.x, 2, PITCH_W - 2), clamp(m.y, 2, PITCH_H - 2)]
+    // Taps stay 2 m inside the touchlines, except into the goal mouth: a tap between the posts may
+    // land up to NET_DEPTH_M behind the line, so a carrier can dribble the ball into the net.
+    const x = clamp(m.x, 2, PITCH_W - 2)
+    const inMouth = Math.abs(x - GOAL_CENTRE_X) <= GOAL_HALF_W
+    return [x, clamp(m.y, 2, inMouth ? GOAL_LINE_Y + NET_DEPTH_M : PITCH_H - 2)]
   }
 
   const onPlayerTap = (id: string) => {
@@ -385,6 +415,10 @@ export function BuilderClient() {
     if (!play || !draft || phase !== 'plan' || inHistory) return
     plansRef.current = scheduleTurn(queue, basePositions).plans
     pendingPlayRef.current = commit ? draft.nextPlay : null
+    const goal = detectGoal(draft.tl.frames)
+    goalAtRef.current = goal ? goal.frameIndex * H : null
+    goalShownRef.current = false
+    setGoalBanner(null)
     setSelected(null)
     setScrubT(null)
     setTimeline(draft.tl)
@@ -527,8 +561,15 @@ export function BuilderClient() {
           </Link>
           <h1 className="truncate text-base font-bold">Turn Builder</h1>
         </div>
-        <div data-testid="turn-counter" className="rounded-full border border-white/10 bg-[var(--app-card)] px-3 py-1 text-sm font-semibold">
-          {phase === 'setup' ? 'Setup' : `Turn ${inHistory && viewSnapshot ? viewSnapshot.turn : turn}`}
+        <div className="flex items-center gap-1.5">
+          {phase !== 'setup' && (
+            <div data-testid="score" aria-label={`${score} goals`} className="rounded-full border border-white/10 bg-[var(--app-card)] px-3 py-1 text-sm font-semibold tabular-nums">
+              ⚽ {score}
+            </div>
+          )}
+          <div data-testid="turn-counter" className="rounded-full border border-white/10 bg-[var(--app-card)] px-3 py-1 text-sm font-semibold">
+            {phase === 'setup' ? 'Setup' : `Turn ${inHistory && viewSnapshot ? viewSnapshot.turn : turn}`}
+          </div>
         </div>
       </header>
 
@@ -694,6 +735,29 @@ export function BuilderClient() {
             })()}
         </svg>
 
+        {goalBanner && (
+          <div
+            data-testid="goal-banner"
+            role="status"
+            onClick={() => !running && setGoalBanner(null)}
+            className={`absolute inset-0 flex flex-col items-center justify-center overflow-hidden ${running ? 'pointer-events-none' : 'cursor-pointer'}`}
+          >
+            {CONFETTI.map((c, i) => (
+              <span
+                key={i}
+                aria-hidden
+                className="builder-confetti absolute top-0 block h-2.5 w-1.5 rounded-sm"
+                style={{ left: `${c.left}%`, background: c.color, animationDelay: `${c.delay}s`, animationDuration: `${c.dur}s` }}
+              />
+            ))}
+            <div className="rounded-2xl bg-[rgba(11,16,21,0.88)] px-8 py-4 text-center shadow-2xl backdrop-blur">
+              <div className="text-5xl font-black tracking-tight text-[#ffd43b] drop-shadow-[0_2px_0_rgba(0,0,0,0.6)]">GOAL!</div>
+              <div className="mt-1 text-xs font-semibold text-[var(--app-muted)]">
+                {goalBanner.preview ? 'Preview — not counted' : `Turn ${goalBanner.turn} · tap to carry on`}
+              </div>
+            </div>
+          </div>
+        )}
         {flash && (
           <div className="pointer-events-none absolute inset-x-0 top-3 flex justify-center">
             <div className="rounded-full bg-[rgba(11,16,21,0.9)] px-4 py-1.5 text-xs font-semibold text-[#ffd43b] shadow-lg backdrop-blur">

@@ -20,6 +20,8 @@ export function PitchMarkings() {
         <rect x={cx - 91.5} y={top ? 0 : h - 55} width={183} height={55} {...LINE} />
         <circle cx={cx} cy={goalLine + dir * 110} r={2.5} fill="white" fillOpacity={0.7} />
         <path d={`M ${cx - arcDx} ${arcY} A 91.5 91.5 0 0 ${top ? 0 : 1} ${cx + arcDx} ${arcY}`} {...LINE} />
+        {/* goal mouth: 7.32 m between the posts, drawn 1.8 m deep behind the line */}
+        <rect x={cx - 36.6} y={top ? -18 : h} width={73.2} height={18} {...LINE} fill="rgba(255,255,255,0.12)" data-testid={top ? 'goal-top' : 'goal-bottom'} />
       </g>
     )
   }
