@@ -8,7 +8,10 @@
  * an action block to retime when it starts (dependencies still win). Taps beyond the XCOM-style
  * movement range are capped to the range boundary. The carrier may tap the goal mouth to shoot
  * (engine/shot.ts gives the chance; Play rolls the dice — a saved shot flies to the keeper, and the
- * ball comes back to the shooter either way). Preview plays the queued turn without committing;
+ * ball comes back to the shooter either way). Passes and dribbles carry a risk % (engine/risk.ts)
+ * from the defenders' positions, shown on the ghost arrow; Play rolls those too — an intercepted
+ * pass flies to the defender, a tackled dribble stops short, and the ball comes back to the player
+ * who lost it (no turnover). Preview plays the queued turn without committing;
  * Play resolves it through the step simulator with the full defensive AI, and the attacking AI
  * suggests support runs as dashed green arrows (✓ queues, × dismisses). Every resolved action becomes
  * a rewind snapshot: ⏪ / ▶️ tween through them, and "Replan from here" branches the game from any
@@ -26,7 +29,8 @@ import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import { H, initialState, sampleTimeline, simulateStep, type PlayerState, type SimState, type StepTimeline } from '@/lib/engine/simulator'
 import { GOAL_CENTRE_X, GOAL_HALF_W, GOAL_LINE_Y, NET_DEPTH_M, detectGoal } from '@/lib/engine/goal'
-import { SHOT_RANGE_M, rollShot, shotChance } from '@/lib/engine/shot'
+import { SHOT_RANGE_M, distToSegment, rollShot, shotChance } from '@/lib/engine/shot'
+import { dribbleRisk, passRisk, rollRisk, type Defender, type Risk } from '@/lib/engine/risk'
 import { newFollowTrack } from '@/lib/engine/follow'
 import { computeAutoMovements, type PitchState } from '@/lib/engine/attackingAI'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
@@ -45,6 +49,7 @@ import {
   MIN_TURN_S,
   PASS_RANGE_M,
   RUN_RANGE_M,
+  TACKLE_S,
   TURN_TAIL_S,
   type ActionKind,
   type ActionPlan,
@@ -69,6 +74,15 @@ const BLOCK_COLORS: Record<string, string> = {
 const SHOT_ARROW = 'rgba(255,140,140,0.95)'
 /** Chip colour for a chance to score: green when likely, amber when even, red when a long shot. */
 const chanceColor = (p: number) => (p >= 0.5 ? '#16a34a' : p >= 0.25 ? '#d97706' : '#dc2626')
+/** Chip colour for a risk of losing the ball: green when safe, amber when dicey, red when likely lost. */
+const riskColor = (r: number) => (r < 0.15 ? '#16a34a' : r < 0.4 ? '#d97706' : '#dc2626')
+type BannerKind = 'goal' | 'saved' | 'lost'
+interface BannerEvent {
+  at: number
+  kind: BannerKind
+  title: string
+  sub: string
+}
 const pct = (p: number) => `${Math.round(p * 100)}%`
 /** Where in the goal mouth a shot aimed at tap x goes: between the posts, just over the line. */
 const shotTarget = (x: number): Pt => [clamp(x, GOAL_CENTRE_X - GOAL_HALF_W + 0.3, GOAL_CENTRE_X + GOAL_HALF_W - 0.3), GOAL_LINE_Y + 0.5]
@@ -123,7 +137,7 @@ export function BuilderClient() {
   const [flash, setFlash] = useState<string | null>(null)
   // Goals scored so far (header chip) and the GOAL! / SAVED banner, shown the moment it happens in playback.
   const [score, setScore] = useState(0)
-  const [goalBanner, setGoalBanner] = useState<{ kind: 'goal' | 'saved'; sub: string; preview: boolean } | null>(null)
+  const [goalBanner, setGoalBanner] = useState<{ kind: BannerKind; title: string; sub: string; preview: boolean } | null>(null)
   const [timeline, setTimeline] = useState<StepTimeline | null>(null)
   const [progress, setProgress] = useState(0)
   // Timeline scrubber: 0..1 through the queued (draft) turn; null = not scrubbing.
@@ -141,8 +155,9 @@ export function BuilderClient() {
   // The play including the running turn's step; only committed when a real Play finishes (not Preview).
   const pendingPlayRef = useRef<Play | null>(null)
   // Banner moments of the running turn (goal crossing, keeper save), in playback seconds; popped as reached.
-  const bannerQueueRef = useRef<{ at: number; kind: 'goal' | 'saved'; sub: string }[]>([])
-  // After a shot the ball comes back to the shooter for the next turn (saved or scored — no turnover).
+  const bannerQueueRef = useRef<BannerEvent[]>([])
+  // Who holds the ball when the turn ends, when the dice overrode the plan: after a shot (saved or
+  // scored) or a lost ball, it comes back to that player for the next turn — no turnover.
   const returnToRef = useRef<string | null>(null)
 
   const running = phase === 'playing' || phase === 'preview'
@@ -194,6 +209,21 @@ export function BuilderClient() {
     })
     return out
   }, [schedule, blockers])
+  // Every defender (keeper included) as he stands at the turn start — who can cut out a pass or tackle.
+  const defenders = useMemo<Defender[]>(
+    () => (play ? play.players.filter((p) => p.team === 'opp').map((p) => ({ id: p.id, at: basePositions[p.id] ?? [p.x, p.y] })) : []),
+    [play, basePositions],
+  )
+  /** Risk of losing the ball for each queued pass / dribble, by queue index (engine/risk.ts). */
+  const risks = useMemo<Record<number, Risk>>(() => {
+    const out: Record<number, Risk> = {}
+    schedule?.plans.forEach((p, i) => {
+      if (p.action.kind === 'pass') out[i] = passRisk(p.from, p.to, defenders)
+      else if (p.action.kind === 'dribble') out[i] = dribbleRisk(p.from, p.to, defenders)
+    })
+    return out
+  }, [schedule, defenders])
+  const threats = useMemo(() => new Set(Object.values(risks).map((r) => r.by).filter((id): id is string => !!id)), [risks])
 
   // The queued turn fully simulated (draft): powers the timeline scrubber and both Preview and Play.
   const draft = useMemo(() => {
@@ -301,7 +331,7 @@ export function BuilderClient() {
       const due = bannerQueueRef.current[0]
       if (due && p * timeline.duration >= due.at) {
         bannerQueueRef.current = bannerQueueRef.current.slice(1)
-        setGoalBanner({ kind: due.kind, sub: due.sub, preview: phase === 'preview' })
+        setGoalBanner({ kind: due.kind, title: due.title, sub: due.sub, preview: phase === 'preview' })
         if (due.kind === 'goal' && phase === 'playing') setScore((n) => n + 1)
       }
       if (p < 1) {
@@ -320,10 +350,11 @@ export function BuilderClient() {
       const startPositions = positionsOf(timeline.start)
       const endPositions = positionsOf(timeline.end)
       const lastBall = timeline.frames.at(-1)?.ball
-      // After a shot the ball returns to the shooter (Stefan: a save or goal costs nothing; play carries on).
-      const nextHolder = holderAfter(holder, actions) ?? returnToRef.current
-      const returned = returnToRef.current !== null && holderAfter(holder, actions) === null
+      // After a shot or a lost ball the ball returns to that player (Stefan: no turnover; play carries on).
+      const override = returnToRef.current
       returnToRef.current = null
+      const nextHolder = override ?? holderAfter(holder, actions)
+      const returned = override !== null
       if (pendingPlayRef.current) setPlay(pendingPlayRef.current)
       pendingPlayRef.current = null
       setChain({
@@ -460,16 +491,36 @@ export function BuilderClient() {
    *  shot goes in). A real Play rolls the dice on each shot first: a saved one flies to the keeper. */
   const beginTurn = (commit: boolean) => {
     if (!play || !draft || phase !== 'plan' || inHistory) return
-    const banners: { at: number; kind: 'goal' | 'saved'; sub: string }[] = []
+    const banners: BannerEvent[] = []
     let nextPlay = draft.nextPlay
     let tl = draft.tl
-    const outcomes: TurnOutcomes = { saved: {} }
+    const outcomes: TurnOutcomes = { saved: {}, intercepted: {}, tackled: {} }
+    let rolled = false
+    let lostBy: { index: number; player: string } | null = null
     if (commit) {
-      queue.forEach((a, i) => {
-        if (a.kind !== 'shot' || !keeperId) return
-        if (rollShot(shotChances[i] ?? 0) === 'saved') outcomes.saved![i] = keeperId
-      })
-      if (Object.keys(outcomes.saved!).length > 0) {
+      // Roll in queue order; the first lost ball ends the ball's story for this turn.
+      for (let i = 0; i < queue.length && !lostBy; i++) {
+        const a = queue[i]
+        if (a.kind === 'shot') {
+          if (keeperId && rollShot(shotChances[i] ?? 0) === 'saved') {
+            outcomes.saved![i] = keeperId
+            rolled = true
+          }
+          continue
+        }
+        const r = risks[i]
+        if (!r || !r.by || rollRisk(r.risk) === 'kept') continue
+        rolled = true
+        lostBy = { index: i, player: a.playerId }
+        if (a.kind === 'pass') outcomes.intercepted![i] = r.by
+        else if (a.kind === 'dribble') {
+          const plan = schedule?.plans[i]
+          const def = defenders.find((d) => d.id === r.by)
+          const u = plan && def ? distToSegment(def.at, plan.from, plan.to).u : 0.5
+          outcomes.tackled![i] = { by: r.by, at: clamp(u, 0.15, 0.9) }
+        }
+      }
+      if (rolled) {
         const stepIndex = play.steps.length
         const step = turnStep(queue, basePositions, stepIndex, outcomes)
         nextPlay = { ...play, steps: [...play.steps, step] }
@@ -482,14 +533,20 @@ export function BuilderClient() {
     plansRef.current = plans
     pendingPlayRef.current = commit ? nextPlay : null
     const lastShot = plans.filter((p) => p.action.kind === 'shot').at(-1)
-    returnToRef.current = lastShot ? lastShot.action.playerId : null
+    const lost: { index: number; player: string } | null = lostBy
+    returnToRef.current = lost ? lost.player : lastShot ? lastShot.action.playerId : null
     plans.forEach((p, i) => {
-      if (p.action.kind !== 'shot') return
-      const chance = shotChances[i] ?? 0
-      if (outcomes.saved?.[i]) banners.push({ at: p.end, kind: 'saved', sub: `${labelOf(keeperId ?? '')} keeps it out (${pct(chance)} chance) · ball back to ${labelOf(p.action.playerId)}` })
+      const who = labelOf(p.action.playerId)
+      if (p.action.kind === 'shot' && outcomes.saved?.[i]) {
+        banners.push({ at: p.end, kind: 'saved', title: 'SAVED', sub: `${labelOf(keeperId ?? '')} keeps it out (${pct(shotChances[i] ?? 0)} chance) · ball back to ${who}` })
+      } else if (p.action.kind === 'pass' && outcomes.intercepted?.[i]) {
+        banners.push({ at: p.end, kind: 'lost', title: 'INTERCEPTED', sub: `opp ${labelOf(outcomes.intercepted[i])} cuts it out (${pct(risks[i]?.risk ?? 0)} risk) · ball back to ${who}` })
+      } else if (p.action.kind === 'dribble' && outcomes.tackled?.[i]) {
+        banners.push({ at: p.end + TACKLE_S, kind: 'lost', title: 'TACKLED', sub: `opp ${labelOf(outcomes.tackled[i].by)} wins it (${pct(risks[i]?.risk ?? 0)} risk) · ball back to ${who}` })
+      }
     })
     const goal = detectGoal(tl.frames)
-    if (goal) banners.push({ at: goal.frameIndex * H, kind: 'goal', sub: commit ? `Turn ${turn} · tap to carry on` : 'Preview — not counted' })
+    if (goal) banners.push({ at: goal.frameIndex * H, kind: 'goal', title: 'GOAL!', sub: commit ? `Turn ${turn} · tap to carry on` : 'Preview — not counted' })
     bannerQueueRef.current = banners.sort((a, b) => a.at - b.at)
     setGoalBanner(null)
     setSelected(null)
@@ -787,6 +844,14 @@ export function BuilderClient() {
                       </text>
                     </g>
                   )}
+                  {risks[i] && (
+                    <g data-testid={`risk-${i}`} data-risk={Math.round(risks[i].risk * 100)}>
+                      <rect x={(f.x + t.x) / 2 - 26} y={(f.y + t.y) / 2 - 13} width={52} height={26} rx={13} fill={riskColor(risks[i].risk)} />
+                      <text x={(f.x + t.x) / 2} y={(f.y + t.y) / 2 + 5} textAnchor="middle" fontSize={15} fontWeight={800} fill="white">
+                        {pct(risks[i].risk)}
+                      </text>
+                    </g>
+                  )}
                 </g>
               )
             })}
@@ -812,6 +877,7 @@ export function BuilderClient() {
               >
                 {/* generous tap target */}
                 {tappable && <circle r={26} fill="transparent" />}
+                {threats.has(p.id) && <circle r={22} fill="none" stroke="#f87171" strokeWidth={3} opacity={0.6} data-testid="threat-ring" />}
                 {isSel && <circle r={21} fill="none" stroke={BALL} strokeWidth={3.5} opacity={0.95} />}
                 {isHolder && !isSel && <circle r={19} fill="none" stroke="white" strokeWidth={2.5} opacity={0.9} />}
                 <circle r={14} fill={isOurs ? OURS : OPP} stroke="rgba(255,255,255,0.65)" strokeWidth={1.5} />
@@ -858,8 +924,8 @@ export function BuilderClient() {
               />
             ))}
             <div className="rounded-2xl bg-[rgba(11,16,21,0.88)] px-8 py-4 text-center shadow-2xl backdrop-blur">
-              <div className={`text-5xl font-black tracking-tight drop-shadow-[0_2px_0_rgba(0,0,0,0.6)] ${goalBanner.kind === 'goal' ? 'text-[#ffd43b]' : 'text-[#ff8a8a]'}`}>
-                {goalBanner.kind === 'goal' ? 'GOAL!' : 'SAVED'}
+              <div className={`font-black tracking-tight drop-shadow-[0_2px_0_rgba(0,0,0,0.6)] ${goalBanner.kind === 'goal' ? 'text-5xl text-[#ffd43b]' : 'text-4xl text-[#ff8a8a]'}`}>
+                {goalBanner.title}
               </div>
               <div className="mt-1 max-w-[260px] text-xs font-semibold text-[var(--app-muted)]">{goalBanner.sub}</div>
             </div>
@@ -925,6 +991,11 @@ export function BuilderClient() {
                     {a.kind === 'shot' && shotChances[i] !== undefined && (
                       <span className="rounded px-1 text-[10px] text-white" style={{ background: chanceColor(shotChances[i]) }}>
                         {pct(shotChances[i])}
+                      </span>
+                    )}
+                    {risks[i] && (
+                      <span className="rounded px-1 text-[10px] text-white" style={{ background: riskColor(risks[i].risk) }}>
+                        {pct(risks[i].risk)}
                       </span>
                     )}
                     <button

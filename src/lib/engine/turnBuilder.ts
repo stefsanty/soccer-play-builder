@@ -30,10 +30,19 @@ export type BuilderAction =
   /** A shot at goal: the ball flies to (toX, toY) in the goal mouth and nobody receives it. */
   | { kind: 'shot'; playerId: string; toX: number; toY: number; delay?: number }
 
-/** Which shots the dice went against: action index -> the keeper who saves (the flight homes onto him). */
+/**
+ * What the dice decided for a turn, by queue index. A saved shot homes onto the keeper; an intercepted
+ * pass flies to the defender instead of the receiver; a tackled dribble stops `at` (0..1 along the
+ * path) and the ball goes to the tackler. After the first lost ball, no later ball-bound action in the
+ * turn is scheduled (its owner never has the ball) — runs still happen.
+ */
 export interface TurnOutcomes {
   saved?: Record<number, string>
+  intercepted?: Record<number, string>
+  tackled?: Record<number, { by: string; at: number }>
 }
+/** How long the tackle itself takes: the ball hops from the dribbler's feet to the tackler. */
+export const TACKLE_S = 0.3
 
 /** One rewindable moment. `turn` 0 / `actionIndex` 0 is the kick-off snapshot. */
 export interface TurnSnapshot {
@@ -166,10 +175,12 @@ export function scheduleTurn(actions: BuilderAction[], startPositions: Record<st
   const moves: PlayerMove[] = []
   const passes: PassAnimation[] = []
   let length = 0
+  let lost = false // the ball went to the other side: later ball-bound actions never happen
 
   actions.forEach((a, index) => {
     const from = planned[a.playerId]
     if (!from) return
+    if (lost && isBallBound(a)) return
     // `delay` is an authored start time (the timeline's drag-to-retime); dependencies still win,
     // so an action can be pushed later but never ahead of its chain or (if ball-bound) the ball.
     const needsBall = isBallBound(a)
@@ -192,22 +203,32 @@ export function scheduleTurn(actions: BuilderAction[], startPositions: Record<st
       avail[a.playerId] = end
       length = Math.max(length, end)
     } else if (a.kind === 'pass') {
-      const to = planned[a.to] ?? from
+      const interceptor = outcomes.intercepted?.[index]
+      const to = (interceptor ? planned[interceptor] : planned[a.to]) ?? from
       const end = start + Math.min(ACTION_MAX_S, Math.max(MIN_ACTION_S, dist(from, to) / PASS_MPS))
-      passes.push({ from: a.playerId, to: a.to, startTime: start, endTime: end, passingSpeed: 'medium' })
+      passes.push({ from: a.playerId, to: interceptor ?? a.to, startTime: start, endTime: end, passingSpeed: 'medium' })
       plans.push({ action: a, from: [...from], to: [...to], start, end })
       avail[a.playerId] = end
+      if (interceptor) lost = true
       // Receiver gets the ball at pass end — later dribbles/passes by him wait, runs do not.
-      ballAvail[a.to] = Math.max(ballAvail[a.to] ?? 0, end)
+      else ballAvail[a.to] = Math.max(ballAvail[a.to] ?? 0, end)
       length = Math.max(length, end)
     } else {
-      const to: Pt = [a.toX, a.toY]
+      const tackle = a.kind === 'dribble' ? outcomes.tackled?.[index] : undefined
+      const full: Pt = [a.toX, a.toY]
+      // a tackled dribble is cut short where the tackler gets a foot in
+      const to: Pt = tackle ? [from[0] + (full[0] - from[0]) * tackle.at, from[1] + (full[1] - from[1]) * tackle.at] : full
       const end = start + Math.min(ACTION_MAX_S, Math.max(MIN_ACTION_S, dist(from, to) / MOVE_MPS))
       moves.push({ playerId: a.playerId, toX: to[0], toY: to[1], startTime: start, endTime: end, runningSpeed: 'jog' })
       plans.push({ action: a, from: [...from], to, start, end })
       planned[a.playerId] = to
       avail[a.playerId] = end
       length = Math.max(length, end)
+      if (tackle) {
+        passes.push({ from: a.playerId, to: tackle.by, startTime: end, endTime: end + TACKLE_S, passingSpeed: 'fast' })
+        length = Math.max(length, end + TACKLE_S)
+        lost = true
+      }
     }
   })
   return { plans, moves, passes, length, planned }
