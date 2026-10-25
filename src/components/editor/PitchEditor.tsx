@@ -26,6 +26,7 @@ import { BALL_OFFSET, getTimeline } from '@/lib/engine/simulator'
 import { useAnimationEngine } from '@/lib/hooks/useAnimationEngine'
 import { computeAutoMovements, type AISuggestedMove, type PitchState } from '@/lib/engine/attackingAI'
 import { derivePlayerActions, passIndexFromId, playerIdFromRunId, type ActionItem } from '@/lib/engine/actions'
+import { narrate } from '@/lib/engine/stepMeta'
 import { PlayerActionPanel } from './PlayerActionPanel'
 import { haptic } from '@/lib/haptics'
 import { ArrowLeft, Check, CircleDot, Pencil, X } from 'lucide-react'
@@ -697,7 +698,12 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
           key={step.id}
           badge={isSetupStep ? 'S' : (step.isAltBranch ? (step.altLabel ?? currentStepIndex) : currentStepIndex)}
           title={step.title}
-          stepLabel={isSetupStep ? 'Starting positions' : `Step ${currentStepIndex + 1} of ${play?.steps.length ?? 1}`}
+          stepLabel={(() => {
+            if (isSetupStep) return 'Starting positions'
+            const n = narrate(step, labelOf)
+            const of = `${currentStepIndex + 1} of ${play?.steps.length ?? 1}`
+            return n ? `${n} · ${of}` : `Step ${of}`
+          })()}
           step={step}
           engine={engine}
           body={runsOpen && step.moves.length > 0 ? <RunsList moves={step.moves} labelOf={labelOf} onToggle={(id) => toggleMoveHidden(id, currentStepIndex)} /> : undefined}
@@ -829,12 +835,13 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
               <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" role="group" aria-label="Steps">
                 {play?.steps.map((st, i) => {
                   const setup = i < SETUP_COUNT
+                  const marker = setup ? '' : narrate(st, labelOf)
                   return (
                     <button
                       key={st.id}
                       type="button"
                       data-testid={`step-chip-${i}`}
-                      aria-label={setup ? `Setup — ${st.title}` : `Step ${st.isAltBranch ? (st.altLabel ?? i) : i}`}
+                      aria-label={setup ? `Setup — ${st.title}` : `Step ${st.isAltBranch ? (st.altLabel ?? i) : i}${marker ? ` — ${marker}` : ''}`}
                       aria-current={i === currentStepIndex ? 'step' : undefined}
                       onClick={() => goToStep(i)}
                       className={`h-9 shrink-0 touch-manipulation select-none rounded-full px-2.5 text-[13px] font-bold transition-all duration-100 active:scale-90 ${
@@ -850,6 +857,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                       } ${st.isAltBranch ? 'border border-dashed border-[#4cc9f0]' : ''}`}
                     >
                       {i === 0 ? 'Setup' : st.isAltBranch ? (st.altLabel ?? i) : i}
+                      {marker && <span className="ml-1.5 whitespace-nowrap text-[10px] font-semibold opacity-70">{marker}</span>}
                     </button>
                   )
                 })}

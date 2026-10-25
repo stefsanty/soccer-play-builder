@@ -22,3 +22,19 @@ export function stepDuration(step: PlayStep): number {
   )
   return last > 0 ? last + SETTLE_MARGIN : 0
 }
+
+/**
+ * What the step IS, as a marker label: the ball's path for a pass step ("GK → RCB"; a legacy
+ * multi-pass step summarises first passer to last receiver), "Reposition" for pure movement,
+ * "Hold" when every move is a hidden stay-put, and '' when there is nothing to say (empty
+ * steps, and the setup step, which callers label themselves).
+ */
+export function narrate(step: PlayStep, labelOf: (id: string) => string): string {
+  if (step.passes.length > 0) {
+    const first = step.passes[0]
+    const last = step.passes[step.passes.length - 1]
+    return `${labelOf(first.from)} → ${labelOf(last.to)}`
+  }
+  if (step.moves.length === 0) return ''
+  return step.moves.some((m) => !m.hidden) ? 'Reposition' : 'Hold'
+}
