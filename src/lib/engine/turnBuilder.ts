@@ -133,16 +133,18 @@ export interface TurnSchedule {
 }
 
 /**
- * Lay the chain out in time. Per player, action k starts when action k-1 ends; a pass also holds its
- * receiver's LATER actions until the ball arrives (actions queued before the pass run beforehand —
- * that's how a player gets open first). Travel times come from distance over pace, clamped to the
- * action budget.
+ * Lay the chain out in time. Per player, action k starts when action k-1 ends. A pass holds its
+ * receiver's later BALL-BOUND actions (dribble/pass) until the ball arrives — the receiver can't
+ * carry what isn't yet at his feet — but a RUN by the receiver runs concurrently with the pass
+ * flight: he moves to meet the ball while it's in the air, and the simulator's flight path homes
+ * onto his live position. Travel times come from distance over pace, clamped to the action budget.
  */
 export function scheduleTurn(actions: BuilderAction[], startPositions: Record<string, Pt>): TurnSchedule {
   const planned: Record<string, Pt> = Object.fromEntries(
     Object.entries(startPositions).map(([id, p]) => [id, [p[0], p[1]] as Pt]),
   )
-  const avail: Record<string, number> = {}
+  const avail: Record<string, number> = {}      // next slot in a player's own action chain
+  const ballAvail: Record<string, number> = {}  // when a player gets the ball — only ball-bound actions wait for this
   const plans: ActionPlan[] = []
   const moves: PlayerMove[] = []
   const passes: PassAnimation[] = []
@@ -152,15 +154,21 @@ export function scheduleTurn(actions: BuilderAction[], startPositions: Record<st
     const from = planned[a.playerId]
     if (!from) continue
     // `delay` is an authored start time (the timeline's drag-to-retime); dependencies still win,
-    // so an action can be pushed later but never ahead of its chain or an incoming ball.
-    const start = Math.max(avail[a.playerId] ?? 0, a.delay ?? 0)
+    // so an action can be pushed later but never ahead of its chain or (if ball-bound) the ball.
+    const needsBall = a.kind === 'pass' || a.kind === 'dribble'
+    const start = Math.max(
+      avail[a.playerId] ?? 0,
+      needsBall ? (ballAvail[a.playerId] ?? 0) : 0,
+      a.delay ?? 0,
+    )
     if (a.kind === 'pass') {
       const to = planned[a.to] ?? from
       const end = start + Math.min(ACTION_MAX_S, Math.max(MIN_ACTION_S, dist(from, to) / PASS_MPS))
       passes.push({ from: a.playerId, to: a.to, startTime: start, endTime: end, passingSpeed: 'medium' })
       plans.push({ action: a, from: [...from], to: [...to], start, end })
       avail[a.playerId] = end
-      avail[a.to] = Math.max(avail[a.to] ?? 0, end) // the receiver's later actions wait for the ball
+      // Receiver gets the ball at pass end — later dribbles/passes by him wait, runs do not.
+      ballAvail[a.to] = Math.max(ballAvail[a.to] ?? 0, end)
       length = Math.max(length, end)
     } else {
       const to: Pt = [a.toX, a.toY]

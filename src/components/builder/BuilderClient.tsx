@@ -42,6 +42,7 @@ import {
   PASS_RANGE_M,
   RUN_RANGE_M,
   TURN_TAIL_S,
+  type ActionKind,
   type ActionPlan,
   type BuilderAction,
   type TurnSnapshot,
@@ -339,7 +340,18 @@ export function BuilderClient() {
     if (!selected) return
     const m = toMeters(e)
     if (!m) return
-    const kind = allowedKinds(selected, projectedHolder).includes('dribble') ? 'dribble' : 'run'
+    // A projected holder with the ball already at their chain time dribbles; otherwise they run,
+    // concurrent with the incoming pass flight (the simulator's pass homes onto the live receiver).
+    const canDribble = allowedKinds(selected, projectedHolder).includes('dribble')
+    let kind: ActionKind = canDribble ? 'dribble' : 'run'
+    if (canDribble && schedule) {
+      const myNext = Math.max(0, ...schedule.plans.filter((p) => p.action.playerId === selected).map((p) => p.end))
+      const ballArrival = Math.max(
+        0,
+        ...schedule.plans.filter((p) => p.action.kind === 'pass' && p.action.to === selected).map((p) => p.end),
+      )
+      if (myNext < ballArrival) kind = 'run'
+    }
     const from = planned[selected] ?? basePositions[selected]
     if (!from) return
     // A tap beyond the highlighted range becomes a maximum-distance move toward that spot.
@@ -495,7 +507,9 @@ export function BuilderClient() {
               ? `${scrubSeconds.toFixed(1)}s — ${activeNow.length ? activeNow.join(' · ') : 'ball settles'}`
               : selected
                 ? allowedKinds(selected, projectedHolder).includes('pass')
-                  ? `${labelOf(selected)} ${selected === holder ? 'has' : 'will have'} the ball — tap a teammate to pass, or the pitch to dribble`
+                  ? selected !== holder
+                    ? `${labelOf(selected)} will have the ball — tap a teammate to pass, or the pitch to run and meet it`
+                    : `${labelOf(selected)} has the ball — tap a teammate to pass, or the pitch to dribble`
                   : `${labelOf(selected)} — tap the pitch to queue a run (beyond the area = max-distance run)`
                 : 'Tap a blue player to select; actions chain in queue order'
 
