@@ -1,21 +1,23 @@
 'use client'
 
 // "Done" check in the top bar: saves the editor's current play (POST first, PUT afterwards).
-// Without a database it shows the DB warning instead.
+// Without a database it shows the DB warning instead. Pass `play` to save something other than the
+// editor store's play (the turn builder's game); `onSaved` then reports the stored play back.
 
 import { useState } from 'react'
 import { Check, Loader2, RotateCcw } from 'lucide-react'
 import { useEditorStore } from '@/lib/store/editorStore'
 import { createPlay, updatePlay } from '@/lib/api/plays'
-import type { PlayInsert } from '@/lib/types/play'
+import type { Play, PlayInsert } from '@/lib/types/play'
 import { isSupabaseConfigured } from '@/lib/supabase/config'
 import { DbBanner } from '@/components/layout/DbBanner'
 
 type Status = 'idle' | 'saving' | 'saved' | 'error'
 
-export function SaveButton() {
-  const play = useEditorStore((s) => s.play)
+export function SaveButton({ play: playProp, onSaved }: { play?: Play | null; onSaved?: (saved: Play) => void } = {}) {
+  const storePlay = useEditorStore((s) => s.play)
   const markSaved = useEditorStore((s) => s.markSaved)
+  const play = playProp !== undefined ? playProp : storePlay
   const [status, setStatus] = useState<Status>('idle')
   const [savedId, setSavedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -43,7 +45,8 @@ export function SaveButton() {
       const existingId = play.id !== 'draft' ? play.id : savedId
       const saved = existingId ? await updatePlay(existingId, input) : await createPlay(input)
       setSavedId(saved.id)
-      markSaved()
+      if (playProp === undefined) markSaved()
+      onSaved?.(saved)
       setStatus('saved')
       setTimeout(() => setStatus((s) => (s === 'saved' ? 'idle' : s)), 2500)
     } catch (e) {

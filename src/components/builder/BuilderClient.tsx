@@ -19,6 +19,8 @@
  * Mobile-first: turn counter top-right, rewind bottom-left, scrollable action queue at the bottom.
  * The bottom panel's rows have fixed heights so the pitch never resizes mid-plan; defenders draw
  * under our team and the holder on top; at most two AI suggestions show, with 44 px ✓/× chips.
+ * The game is a Play (setup + one step per turn): the header's Save stores it through the editor's
+ * save path, and leaving with unsaved turns asks first (back arrow confirm + beforeunload).
  * @props {}
  * @dataDependencies engine/turnBuilder, engine/simulator (simulateStep/sampleTimeline), engine/attackingAI, engine/defaultPlay, engine/follow
  */
@@ -36,6 +38,8 @@ import { dribbleRisk, passRisk, rollRisk, type Defender, type Risk } from '@/lib
 import { newFollowTrack } from '@/lib/engine/follow'
 import { computeAutoMovements, type PitchState } from '@/lib/engine/attackingAI'
 import { drawOrder, pickSuggestions } from '@/lib/engine/builderHints'
+import { builderTitle, hasUnsavedWork } from '@/lib/engine/builderSave'
+import { SaveButton } from '@/components/editor/SaveButton'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
 import { PitchSurface } from '@/components/editor/PitchSurface'
 import {
@@ -139,7 +143,9 @@ const stateFromPositions = (play: Play, positions: Record<string, Pt>): SimState
 
 export function BuilderClient() {
   const [play, setPlay] = useState<Play | null>(null)
-  useEffect(() => setPlay(createDefaultPlay()), []) // crypto.randomUUID → client only
+  useEffect(() => setPlay({ ...createDefaultPlay(), title: builderTitle(new Date()) }), []) // crypto.randomUUID → client only
+  // How many steps the last save stored; the game is "dirty" when there is more (or a queue).
+  const [savedStepCount, setSavedStepCount] = useState(0)
 
   const [phase, setPhase] = useState<Phase>('setup')
   const [holder, setHolder] = useState<string | null>(null)
@@ -177,6 +183,22 @@ export function BuilderClient() {
   const returnToRef = useRef<string | null>(null)
 
   const running = phase === 'playing' || phase === 'preview'
+  const dirty = !!play && hasUnsavedWork({ stepCount: play.steps.length, queued: queue.length, savedStepCount })
+
+  // Leaving with unsaved turns: the browser's own prompt on reload / close…
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+  // …and a confirm on the back arrow.
+  const confirmLeave = (e: React.MouseEvent) => {
+    if (!dirty) return
+    if (!window.confirm('Leave the Turn Builder? This game is not saved and will be lost.')) e.preventDefault()
+  }
 
   useEffect(() => {
     if (!flash) return
@@ -495,6 +517,9 @@ export function BuilderClient() {
 
   const startGame = () => {
     if (!play || !holder) return
+    // The setup step records where the ball starts, so a saved game opens in the editor with the ball there.
+    const h = basePositions[holder]
+    if (h) setPlay({ ...play, steps: [{ ...play.steps[0], ballPosition: { x: h[0], y: h[1] } }, ...play.steps.slice(1)] })
     setHistory([
       {
         turn: 0,
@@ -707,12 +732,12 @@ export function BuilderClient() {
       {/* top bar: back + title, turn counter top-right */}
       <header className="flex h-12 shrink-0 items-center justify-between px-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Link href="/" aria-label="Home" className="flex size-9 items-center justify-center rounded-lg text-[var(--app-muted)] hover:text-white">
+          <Link href="/" aria-label="Home" onClick={confirmLeave} data-testid="builder-back" className="flex size-9 items-center justify-center rounded-lg text-[var(--app-muted)] hover:text-white">
             <ArrowLeft className="size-5" />
           </Link>
           <h1 className="truncate text-base font-bold">Turn Builder</h1>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="relative flex items-center gap-1.5">
           {phase !== 'setup' && (
             <div data-testid="score" aria-label={`${score} goals`} className="rounded-full border border-white/10 bg-[var(--app-card)] px-3 py-1 text-sm font-semibold tabular-nums">
               ⚽ {score}
@@ -721,6 +746,12 @@ export function BuilderClient() {
           <div data-testid="turn-counter" className="rounded-full border border-white/10 bg-[var(--app-card)] px-3 py-1 text-sm font-semibold">
             {phase === 'setup' ? 'Setup' : `Turn ${inHistory && viewSnapshot ? viewSnapshot.turn : turn}`}
           </div>
+          {/* Save the game as a play (the editor's own save path): setup + one step per resolved turn */}
+          {phase !== 'setup' && (
+            <div className="relative" title={dirty ? 'Save this game' : 'Saved'}>
+              <SaveButton play={play} onSaved={(saved) => setSavedStepCount(saved.steps.length)} />
+            </div>
+          )}
         </div>
       </header>
 
