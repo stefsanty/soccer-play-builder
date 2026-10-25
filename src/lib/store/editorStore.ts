@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import type { AiConfig, Play, PlayStep, PlayerMove, PassAnimation } from '@/lib/types/play'
 import { applyFormation, type FormationKey } from '@/lib/engine/formations'
+import { stepDuration } from '@/lib/engine/stepMeta'
 
 export type EditorMode =
   | 'select'        // click to select player
@@ -122,7 +123,7 @@ export const useEditorStore = create<EditorState>()(
         id: crypto.randomUUID(),
         index: s.play.steps.length,
         title: `Step ${s.play.steps.length + 1}`,
-        duration: 4,
+        duration: 0, // derived from the step's actions (stepDuration)
         moves: [],
         passes: [],
         defenderRules: {},
@@ -187,7 +188,7 @@ export const useEditorStore = create<EditorState>()(
     addHold: (stepIndex, playerId, x, y) => set((s) => {
       if (!s.play) return
       const step = s.play.steps[stepIndex]
-      const move: PlayerMove = { playerId, toX: x, toY: y, startTime: 0, endTime: step.duration, hidden: true }
+      const move: PlayerMove = { playerId, toX: x, toY: y, startTime: 0, endTime: stepDuration(step), hidden: true }
       const existing = step.moves.findIndex((m) => m.playerId === playerId)
       if (existing >= 0) step.moves[existing] = move
       else step.moves.push(move)

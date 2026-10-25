@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Play } from '@/lib/types/play'
-import { stepSeconds } from '@/lib/engine/computeFrame'
+import { stepDuration } from '@/lib/engine/stepMeta'
 import { getTimeline, sampleTimeline, type SimFrame, type StepTimeline } from '@/lib/engine/simulator'
 
 export interface AnimationEngine {
@@ -34,7 +34,10 @@ export function useAnimationEngine(play: Play | null, stepIndex: number, speed =
   const [isPlaying, setIsPlaying] = useState(false)
   const progressRef = useRef(0)
 
-  const duration = stepSeconds(play?.steps[stepIndex]?.duration)
+  // Derived step length; a step with no actions still scrubs over a nominal window (and a
+  // 0 would NaN the rAF progress math).
+  const step = play?.steps[stepIndex]
+  const duration = (step ? stepDuration(step) : 0) || 3
 
   const seek = useCallback((t: number) => {
     const v = Math.min(1, Math.max(0, Number.isFinite(t) ? t : 0))
