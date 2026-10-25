@@ -196,7 +196,7 @@ export function AnimatedPitch({ play, stepIndex, onStepChange, autoPlay = true, 
             if (time < p.startTime) return null
             const o = pt(timeline.passOrigins[i][0], timeline.passOrigins[i][1])
             const landed = time >= p.endTime
-            const end = landed ? C(p.to) : pt(frame.ball.x, frame.ball.y)
+            const end = landed ? (p.target ? pt(p.target[0], p.target[1]) : C(p.to)) : pt(frame.ball.x, frame.ball.y)
             if (!end) return null
             return (
               <line key={`pass-${i}`} data-testid={landed ? 'pass-line-done' : 'pass-line'} x1={o.x} y1={o.y} x2={end.x} y2={end.y}

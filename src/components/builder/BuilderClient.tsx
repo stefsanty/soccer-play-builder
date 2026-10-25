@@ -6,7 +6,9 @@
  * receiver's later actions waiting for the ball to arrive. A video-editor style timeline lays the
  * queued turn out in time: scrub it to preview any frame (ball position, who is doing what), and drag
  * an action block to retime when it starts (dependencies still win). Taps beyond the XCOM-style
- * movement range are capped to the range boundary. Preview plays the queued turn without committing;
+ * movement range are capped to the range boundary. The carrier may tap the goal mouth to shoot
+ * (engine/shot.ts gives the chance; Play rolls the dice — a saved shot flies to the keeper, and the
+ * ball comes back to the shooter either way). Preview plays the queued turn without committing;
  * Play resolves it through the step simulator with the full defensive AI, and the attacking AI
  * suggests support runs as dashed green arrows (✓ queues, × dismisses). Every resolved action becomes
  * a rewind snapshot: ⏪ / ▶️ tween through them, and "Replan from here" branches the game from any
@@ -24,6 +26,7 @@ import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import { H, initialState, sampleTimeline, simulateStep, type PlayerState, type SimState, type StepTimeline } from '@/lib/engine/simulator'
 import { GOAL_CENTRE_X, GOAL_HALF_W, GOAL_LINE_Y, NET_DEPTH_M, detectGoal } from '@/lib/engine/goal'
+import { SHOT_RANGE_M, rollShot, shotChance } from '@/lib/engine/shot'
 import { newFollowTrack } from '@/lib/engine/follow'
 import { computeAutoMovements, type PitchState } from '@/lib/engine/attackingAI'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
@@ -46,6 +49,7 @@ import {
   type ActionKind,
   type ActionPlan,
   type BuilderAction,
+  type TurnOutcomes,
   type TurnSnapshot,
 } from '@/lib/engine/turnBuilder'
 
@@ -60,7 +64,14 @@ const BLOCK_COLORS: Record<string, string> = {
   pass: 'rgba(255,255,255,0.85)',
   dribble: 'rgba(255,170,60,0.9)',
   run: 'rgba(255,212,59,0.85)',
+  shot: 'rgba(255,120,120,0.95)',
 }
+const SHOT_ARROW = 'rgba(255,140,140,0.95)'
+/** Chip colour for a chance to score: green when likely, amber when even, red when a long shot. */
+const chanceColor = (p: number) => (p >= 0.5 ? '#16a34a' : p >= 0.25 ? '#d97706' : '#dc2626')
+const pct = (p: number) => `${Math.round(p * 100)}%`
+/** Where in the goal mouth a shot aimed at tap x goes: between the posts, just over the line. */
+const shotTarget = (x: number): Pt => [clamp(x, GOAL_CENTRE_X - GOAL_HALF_W + 0.3, GOAL_CENTRE_X + GOAL_HALF_W - 0.3), GOAL_LINE_Y + 0.5]
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 /** Confetti pieces for the GOAL! banner — fixed layout so the burst looks the same every time. */
@@ -110,9 +121,9 @@ export function BuilderClient() {
   const [history, setHistory] = useState<TurnSnapshot[]>([])
   const [historyIdx, setHistoryIdx] = useState<number | null>(null)
   const [flash, setFlash] = useState<string | null>(null)
-  // Goals scored so far (header chip) and the GOAL! banner, shown the moment the ball crosses the line.
+  // Goals scored so far (header chip) and the GOAL! / SAVED banner, shown the moment it happens in playback.
   const [score, setScore] = useState(0)
-  const [goalBanner, setGoalBanner] = useState<{ turn: number; preview: boolean } | null>(null)
+  const [goalBanner, setGoalBanner] = useState<{ kind: 'goal' | 'saved'; sub: string; preview: boolean } | null>(null)
   const [timeline, setTimeline] = useState<StepTimeline | null>(null)
   const [progress, setProgress] = useState(0)
   // Timeline scrubber: 0..1 through the queued (draft) turn; null = not scrubbing.
@@ -129,9 +140,10 @@ export function BuilderClient() {
   const plansRef = useRef<ActionPlan[]>([])
   // The play including the running turn's step; only committed when a real Play finishes (not Preview).
   const pendingPlayRef = useRef<Play | null>(null)
-  // Second at which the running turn's ball crosses into the goal (null = no goal this turn).
-  const goalAtRef = useRef<number | null>(null)
-  const goalShownRef = useRef(false)
+  // Banner moments of the running turn (goal crossing, keeper save), in playback seconds; popped as reached.
+  const bannerQueueRef = useRef<{ at: number; kind: 'goal' | 'saved'; sub: string }[]>([])
+  // After a shot the ball comes back to the shooter for the next turn (saved or scored — no turnover).
+  const returnToRef = useRef<string | null>(null)
 
   const running = phase === 'playing' || phase === 'preview'
 
@@ -167,6 +179,21 @@ export function BuilderClient() {
   // Who will hold the ball once the queue so far has run — gating follows this through the chain.
   const projectedHolder = holderAfter(holder, queue)
   const tlDuration = schedule ? Math.max(MIN_TURN_S, schedule.length + TURN_TAIL_S) : 0
+
+  // Shooting: the keeper saves (the roll homes a saved shot onto him); other defenders can block.
+  const keeperId = useMemo(() => play?.players.find((p) => p.team === 'opp' && /gk/i.test(p.label))?.id ?? null, [play])
+  const blockers = useMemo<Pt[]>(
+    () => (play ? play.players.filter((p) => p.team === 'opp' && p.id !== keeperId).map((p) => basePositions[p.id] ?? [p.x, p.y]) : []),
+    [play, keeperId, basePositions],
+  )
+  /** Chance to score for each queued shot, by queue index. */
+  const shotChances = useMemo<Record<number, number>>(() => {
+    const out: Record<number, number> = {}
+    schedule?.plans.forEach((p, i) => {
+      if (p.action.kind === 'shot') out[i] = shotChance(p.from, p.to, blockers)
+    })
+    return out
+  }, [schedule, blockers])
 
   // The queued turn fully simulated (draft): powers the timeline scrubber and both Preview and Play.
   const draft = useMemo(() => {
@@ -271,10 +298,11 @@ export function BuilderClient() {
       last = now
       p = Math.min(1, p + dt / timeline.duration)
       setProgress(p)
-      if (goalAtRef.current !== null && !goalShownRef.current && p * timeline.duration >= goalAtRef.current) {
-        goalShownRef.current = true
-        setGoalBanner({ turn, preview: phase === 'preview' })
-        if (phase === 'playing') setScore((n) => n + 1)
+      const due = bannerQueueRef.current[0]
+      if (due && p * timeline.duration >= due.at) {
+        bannerQueueRef.current = bannerQueueRef.current.slice(1)
+        setGoalBanner({ kind: due.kind, sub: due.sub, preview: phase === 'preview' })
+        if (due.kind === 'goal' && phase === 'playing') setScore((n) => n + 1)
       }
       if (p < 1) {
         raf = requestAnimationFrame(tick)
@@ -292,15 +320,23 @@ export function BuilderClient() {
       const startPositions = positionsOf(timeline.start)
       const endPositions = positionsOf(timeline.end)
       const lastBall = timeline.frames.at(-1)?.ball
-      const nextHolder = holderAfter(holder, actions)
+      // After a shot the ball returns to the shooter (Stefan: a save or goal costs nothing; play carries on).
+      const nextHolder = holderAfter(holder, actions) ?? returnToRef.current
+      const returned = returnToRef.current !== null && holderAfter(holder, actions) === null
+      returnToRef.current = null
       if (pendingPlayRef.current) setPlay(pendingPlayRef.current)
       pendingPlayRef.current = null
       setChain({
         state: timeline.end,
-        ball: lastBall ? [lastBall.x, lastBall.y] : (endPositions[nextHolder ?? ''] ?? [PITCH_W / 2, PITCH_H / 2]),
+        ball: lastBall && !returned ? [lastBall.x, lastBall.y] : (endPositions[nextHolder ?? ''] ?? [PITCH_W / 2, PITCH_H / 2]),
         holder: nextHolder ?? '',
       })
-      setHistory((h) => [...h, ...buildSnapshots(turn, plans, startPositions, endPositions, holder, labelOf)])
+      setHistory((h) => {
+        const snaps = buildSnapshots(turn, plans, startPositions, endPositions, holder, labelOf)
+        const last = snaps.at(-1)
+        if (last && returned) snaps[snaps.length - 1] = { ...last, holder: nextHolder }
+        return [...h, ...snaps]
+      })
       setHolder(nextHolder)
       setTurn((t) => t + 1)
       setQueue([])
@@ -384,6 +420,16 @@ export function BuilderClient() {
     }
     const from = planned[selected] ?? basePositions[selected]
     if (!from) return
+    // The carrier tapping the goal mouth shoots (within range), else dribbles closer.
+    if (kind === 'dribble' && Math.abs(m[0] - GOAL_CENTRE_X) <= GOAL_HALF_W && m[1] >= GOAL_LINE_Y - 0.5) {
+      const target = shotTarget(m[0])
+      if (Math.hypot(target[0] - from[0], target[1] - from[1]) <= SHOT_RANGE_M) {
+        setQueue((q) => queueAction(q, { kind: 'shot', playerId: selected, toX: target[0], toY: target[1] }))
+        setSelected(null)
+        return
+      }
+      setFlash(`Too far to shoot (max ${SHOT_RANGE_M}m) — ${labelOf(selected)} dribbles closer`)
+    }
     // A tap beyond the highlighted range becomes a maximum-distance move toward that spot.
     let to: Pt = m
     const d = Math.hypot(m[0] - from[0], m[1] - from[1])
@@ -410,18 +456,45 @@ export function BuilderClient() {
     setPhase('plan')
   }
 
-  /** Simulate the queued turn; `commit: false` is Preview (nothing persists when it ends). */
+  /** Simulate the queued turn; `commit: false` is Preview (nothing persists when it ends, and every
+   *  shot goes in). A real Play rolls the dice on each shot first: a saved one flies to the keeper. */
   const beginTurn = (commit: boolean) => {
     if (!play || !draft || phase !== 'plan' || inHistory) return
-    plansRef.current = scheduleTurn(queue, basePositions).plans
-    pendingPlayRef.current = commit ? draft.nextPlay : null
-    const goal = detectGoal(draft.tl.frames)
-    goalAtRef.current = goal ? goal.frameIndex * H : null
-    goalShownRef.current = false
+    const banners: { at: number; kind: 'goal' | 'saved'; sub: string }[] = []
+    let nextPlay = draft.nextPlay
+    let tl = draft.tl
+    const outcomes: TurnOutcomes = { saved: {} }
+    if (commit) {
+      queue.forEach((a, i) => {
+        if (a.kind !== 'shot' || !keeperId) return
+        if (rollShot(shotChances[i] ?? 0) === 'saved') outcomes.saved![i] = keeperId
+      })
+      if (Object.keys(outcomes.saved!).length > 0) {
+        const stepIndex = play.steps.length
+        const step = turnStep(queue, basePositions, stepIndex, outcomes)
+        nextPlay = { ...play, steps: [...play.steps, step] }
+        const start = chain ? chain.state : initialState(nextPlay)
+        const startBall: Pt = chain ? chain.ball : (basePositions[holder ?? ''] ?? [PITCH_W / 2, PITCH_H / 2])
+        tl = simulateStep(nextPlay, stepIndex, start, holder, startBall)
+      }
+    }
+    const plans = scheduleTurn(queue, basePositions, outcomes).plans
+    plansRef.current = plans
+    pendingPlayRef.current = commit ? nextPlay : null
+    const lastShot = plans.filter((p) => p.action.kind === 'shot').at(-1)
+    returnToRef.current = lastShot ? lastShot.action.playerId : null
+    plans.forEach((p, i) => {
+      if (p.action.kind !== 'shot') return
+      const chance = shotChances[i] ?? 0
+      if (outcomes.saved?.[i]) banners.push({ at: p.end, kind: 'saved', sub: `${labelOf(keeperId ?? '')} keeps it out (${pct(chance)} chance) · ball back to ${labelOf(p.action.playerId)}` })
+    })
+    const goal = detectGoal(tl.frames)
+    if (goal) banners.push({ at: goal.frameIndex * H, kind: 'goal', sub: commit ? `Turn ${turn} · tap to carry on` : 'Preview — not counted' })
+    bannerQueueRef.current = banners.sort((a, b) => a.at - b.at)
     setGoalBanner(null)
     setSelected(null)
     setScrubT(null)
-    setTimeline(draft.tl)
+    setTimeline(tl)
     setProgress(0)
     setPhase(commit ? 'playing' : 'preview')
   }
@@ -543,7 +616,7 @@ export function BuilderClient() {
                 ? allowedKinds(selected, projectedHolder).includes('pass')
                   ? selected !== holder
                     ? `${labelOf(selected)} will have the ball — tap a teammate to pass, or the pitch to run and meet it`
-                    : `${labelOf(selected)} has the ball — tap a teammate to pass, or the pitch to dribble`
+                    : `${labelOf(selected)} has the ball — tap a teammate to pass, the pitch to dribble, or the goal to shoot`
                   : `${labelOf(selected)} — tap the pitch to queue a run (beyond the area = max-distance run)`
                 : 'Tap a blue player to select; actions chain in queue order'
 
@@ -609,6 +682,28 @@ export function BuilderClient() {
             )
           })()}
 
+          {/* shoot target: the goal mouth lights up when the selected carrier is within range */}
+          {selected && phase === 'plan' && !inHistory && scrubT === null && allowedKinds(selected, projectedHolder).includes('shot') && (() => {
+            const p0 = planned[selected] ?? basePositions[selected]
+            if (!p0) return null
+            const centre = shotTarget(GOAL_CENTRE_X)
+            const d = Math.hypot(centre[0] - p0[0], centre[1] - p0[1])
+            if (d > SHOT_RANGE_M) return null
+            const chance = shotChance(p0, centre, blockers)
+            const tl = pt(GOAL_CENTRE_X - GOAL_HALF_W, GOAL_LINE_Y)
+            return (
+              <g pointerEvents="none" data-testid="shoot-target">
+                <rect x={tl.x} y={tl.y - 18} width={GOAL_HALF_W * 20} height={18 + 10} rx={4} fill="rgba(255,120,120,0.35)" stroke={SHOT_ARROW} strokeWidth={2.5} strokeDasharray="8 6">
+                  <animate attributeName="opacity" values="1;0.45;1" dur="1.2s" repeatCount="indefinite" />
+                </rect>
+                <rect x={tl.x + GOAL_HALF_W * 10 - 52} y={tl.y + 16} width={104} height={26} rx={13} fill={chanceColor(chance)} />
+                <text x={tl.x + GOAL_HALF_W * 10} y={tl.y + 34} textAnchor="middle" fontSize={15} fontWeight={800} fill="white">
+                  Shoot · {pct(chance)}
+                </text>
+              </g>
+            )
+          })()}
+
           {/* attacking-AI suggestions (dashed green) — ✓ queues the run, × dismisses it */}
           {suggestions.map((s) => {
             const from = planned[s.playerId] ?? basePositions[s.playerId]
@@ -670,17 +765,28 @@ export function BuilderClient() {
               const d = Math.hypot(t.x - f.x, t.y - f.y) || 1
               const ux = (t.x - f.x) / d
               const uy = (t.y - f.y) / d
+              const isShot = action.kind === 'shot'
+              const stroke = isShot ? SHOT_ARROW : GHOST
+              const chance = shotChances[i]
               return (
                 <g key={`${action.playerId}-${i}`} pointerEvents="none">
-                  <line x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke={GHOST} strokeWidth={3} strokeDasharray={action.kind === 'pass' ? '4 8' : '12 8'} />
+                  <line x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke={stroke} strokeWidth={isShot ? 4 : 3} strokeDasharray={isShot ? undefined : action.kind === 'pass' ? '4 8' : '12 8'} />
                   <polyline
                     points={`${t.x - ux * 18 - uy * 9},${t.y - uy * 18 + ux * 9} ${t.x},${t.y} ${t.x - ux * 18 + uy * 9},${t.y - uy * 18 - ux * 9}`}
                     fill="none"
-                    stroke={GHOST}
+                    stroke={stroke}
                     strokeWidth={3}
                     strokeLinejoin="round"
                   />
-                  {action.kind !== 'pass' && <circle cx={t.x} cy={t.y} r={16} fill="none" stroke={GHOST} strokeWidth={2.5} strokeDasharray="5 4" />}
+                  {action.kind === 'run' || action.kind === 'dribble' ? <circle cx={t.x} cy={t.y} r={16} fill="none" stroke={GHOST} strokeWidth={2.5} strokeDasharray="5 4" /> : null}
+                  {isShot && chance !== undefined && (
+                    <g data-testid={`shot-chance-${i}`}>
+                      <rect x={(f.x + t.x) / 2 - 46} y={(f.y + t.y) / 2 - 13} width={92} height={26} rx={13} fill={chanceColor(chance)} />
+                      <text x={(f.x + t.x) / 2} y={(f.y + t.y) / 2 + 5} textAnchor="middle" fontSize={15} fontWeight={800} fill="white">
+                        Goal {pct(chance)}
+                      </text>
+                    </g>
+                  )}
                 </g>
               )
             })}
@@ -737,12 +843,13 @@ export function BuilderClient() {
 
         {goalBanner && (
           <div
-            data-testid="goal-banner"
+            data-testid="turn-banner"
+            data-kind={goalBanner.kind}
             role="status"
             onClick={() => !running && setGoalBanner(null)}
             className={`absolute inset-0 flex flex-col items-center justify-center overflow-hidden ${running ? 'pointer-events-none' : 'cursor-pointer'}`}
           >
-            {CONFETTI.map((c, i) => (
+            {goalBanner.kind === 'goal' && CONFETTI.map((c, i) => (
               <span
                 key={i}
                 aria-hidden
@@ -751,10 +858,10 @@ export function BuilderClient() {
               />
             ))}
             <div className="rounded-2xl bg-[rgba(11,16,21,0.88)] px-8 py-4 text-center shadow-2xl backdrop-blur">
-              <div className="text-5xl font-black tracking-tight text-[#ffd43b] drop-shadow-[0_2px_0_rgba(0,0,0,0.6)]">GOAL!</div>
-              <div className="mt-1 text-xs font-semibold text-[var(--app-muted)]">
-                {goalBanner.preview ? 'Preview — not counted' : `Turn ${goalBanner.turn} · tap to carry on`}
+              <div className={`text-5xl font-black tracking-tight drop-shadow-[0_2px_0_rgba(0,0,0,0.6)] ${goalBanner.kind === 'goal' ? 'text-[#ffd43b]' : 'text-[#ff8a8a]'}`}>
+                {goalBanner.kind === 'goal' ? 'GOAL!' : 'SAVED'}
               </div>
+              <div className="mt-1 max-w-[260px] text-xs font-semibold text-[var(--app-muted)]">{goalBanner.sub}</div>
             </div>
           </div>
         )}
@@ -815,6 +922,11 @@ export function BuilderClient() {
                     <span className="text-[10px] text-[var(--app-muted)]">{i + 1}</span>
                     {a.kind !== 'run' && <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />}
                     {actionLabel(a, labelOf)}
+                    {a.kind === 'shot' && shotChances[i] !== undefined && (
+                      <span className="rounded px-1 text-[10px] text-white" style={{ background: chanceColor(shotChances[i]) }}>
+                        {pct(shotChances[i])}
+                      </span>
+                    )}
                     <button
                       onClick={() => setQueue((q) => sanitizeQueue(q.filter((_, j) => j !== i), holder))}
                       aria-label={`Remove ${actionLabel(a, labelOf)}`}

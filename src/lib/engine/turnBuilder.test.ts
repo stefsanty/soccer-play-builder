@@ -25,8 +25,8 @@ type Pt = [number, number]
 const id = (s: string) => s
 
 describe('allowedKinds', () => {
-  it('the (projected) ball carrier may pass or dribble, never run', () => {
-    expect(allowedKinds('a', 'a')).toEqual(['pass', 'dribble'])
+  it('the (projected) ball carrier may pass, dribble or shoot, never run', () => {
+    expect(allowedKinds('a', 'a')).toEqual(['pass', 'dribble', 'shot'])
   })
   it('everyone else may only run', () => {
     expect(allowedKinds('b', 'a')).toEqual(['run'])

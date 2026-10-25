@@ -17,15 +17,23 @@
 // the AI-driven defenders i/N of the way to where the turn left them.
 
 import type { PassAnimation, PlayerMove, PlayStep } from '@/lib/types/play'
+import { SHOT_RANGE_M } from '@/lib/engine/shot'
 
 type Pt = [number, number]
 
-export type ActionKind = 'pass' | 'dribble' | 'run'
+export type ActionKind = 'pass' | 'dribble' | 'run' | 'shot'
 
 export type BuilderAction =
   | { kind: 'pass'; playerId: string; to: string; delay?: number }
   | { kind: 'dribble'; playerId: string; toX: number; toY: number; delay?: number }
   | { kind: 'run'; playerId: string; toX: number; toY: number; delay?: number }
+  /** A shot at goal: the ball flies to (toX, toY) in the goal mouth and nobody receives it. */
+  | { kind: 'shot'; playerId: string; toX: number; toY: number; delay?: number }
+
+/** Which shots the dice went against: action index -> the keeper who saves (the flight homes onto him). */
+export interface TurnOutcomes {
+  saved?: Record<number, string>
+}
 
 /** One rewindable moment. `turn` 0 / `actionIndex` 0 is the kick-off snapshot. */
 export interface TurnSnapshot {
@@ -43,6 +51,8 @@ export interface TurnSnapshot {
 // speeds, not the editor's snappy 40/15 defaults.
 export const PASS_MPS = 18
 export const MOVE_MPS = 6
+/** A struck shot travels faster than a pass. */
+export const SHOT_MPS = 24
 export const MIN_ACTION_S = 0.5
 /** XCOM-style action budget: no single action may take longer than this. At the paces above that
  *  means a 21m run and a 63m pass. A tap beyond the run range is capped to it, not refused. */
@@ -58,18 +68,24 @@ const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1])
 /** What the selected player may queue, given who will hold the ball once the queue so far has run:
  *  the (projected) carrier passes or dribbles, everyone else runs. */
 export function allowedKinds(playerId: string, holder: string | null): ActionKind[] {
-  return playerId === holder ? ['pass', 'dribble'] : ['run']
+  return playerId === holder ? ['pass', 'dribble', 'shot'] : ['run']
 }
+
+const isBallBound = (a: BuilderAction) => a.kind === 'pass' || a.kind === 'dribble' || a.kind === 'shot'
 
 /** Append `action` to the chain. */
 export function queueAction(queue: BuilderAction[], action: BuilderAction): BuilderAction[] {
   return [...queue, action]
 }
 
-/** Holder once the given actions resolve: the last pass's recipient, else unchanged. */
+/** Holder once the given actions resolve: the last pass's recipient; nobody after a shot; else unchanged. */
 export function holderAfter(holder: string | null, actions: BuilderAction[]): string | null {
-  const pass = actions.filter((a) => a.kind === 'pass').at(-1)
-  return pass ? pass.to : holder
+  let h = holder
+  for (const a of actions) {
+    if (a.kind === 'pass') h = a.to
+    else if (a.kind === 'shot') h = null
+  }
+  return h
 }
 
 /** Drop ball actions whose owner would not hold the ball at that point in the chain — used after a
@@ -85,13 +101,14 @@ export function sanitizeQueue(queue: BuilderAction[], startHolder: string | null
     if (a.playerId !== projected) continue
     kept.push(a)
     if (a.kind === 'pass') projected = a.to
+    else if (a.kind === 'shot') projected = null
   }
   return kept
 }
 
 export function actionLabel(action: BuilderAction, labelOf: (id: string) => string): string {
   if (action.kind === 'pass') return `${labelOf(action.playerId)} → ${labelOf(action.to)}`
-  return `${labelOf(action.playerId)} ${action.kind === 'dribble' ? 'dribbles' : 'runs'}`
+  return `${labelOf(action.playerId)} ${action.kind === 'dribble' ? 'dribbles' : action.kind === 'shot' ? 'shoots' : 'runs'}`
 }
 
 /** Set an action's authored start time (timeline drag), tenth-of-a-second resolution, never negative. */
@@ -102,7 +119,7 @@ export function retimeAction(queue: BuilderAction[], index: number, delay: numbe
 
 /** How far this kind of action may reach within the action budget. */
 export function actionRange(kind: ActionKind): number {
-  return kind === 'pass' ? PASS_RANGE_M : RUN_RANGE_M
+  return kind === 'pass' ? PASS_RANGE_M : kind === 'shot' ? SHOT_RANGE_M : RUN_RANGE_M
 }
 
 /** Whether the action's travel distance fits the budget (the UI caps moves / refuses passes otherwise). */
@@ -139,7 +156,7 @@ export interface TurnSchedule {
  * flight: he moves to meet the ball while it's in the air, and the simulator's flight path homes
  * onto his live position. Travel times come from distance over pace, clamped to the action budget.
  */
-export function scheduleTurn(actions: BuilderAction[], startPositions: Record<string, Pt>): TurnSchedule {
+export function scheduleTurn(actions: BuilderAction[], startPositions: Record<string, Pt>, outcomes: TurnOutcomes = {}): TurnSchedule {
   const planned: Record<string, Pt> = Object.fromEntries(
     Object.entries(startPositions).map(([id, p]) => [id, [p[0], p[1]] as Pt]),
   )
@@ -150,18 +167,31 @@ export function scheduleTurn(actions: BuilderAction[], startPositions: Record<st
   const passes: PassAnimation[] = []
   let length = 0
 
-  for (const a of actions) {
+  actions.forEach((a, index) => {
     const from = planned[a.playerId]
-    if (!from) continue
+    if (!from) return
     // `delay` is an authored start time (the timeline's drag-to-retime); dependencies still win,
     // so an action can be pushed later but never ahead of its chain or (if ball-bound) the ball.
-    const needsBall = a.kind === 'pass' || a.kind === 'dribble'
+    const needsBall = isBallBound(a)
     const start = Math.max(
       avail[a.playerId] ?? 0,
       needsBall ? (ballAvail[a.playerId] ?? 0) : 0,
       a.delay ?? 0,
     )
-    if (a.kind === 'pass') {
+    if (a.kind === 'shot') {
+      // The ball flies to the spot in the goal mouth; a saved shot homes onto the keeper instead.
+      const to: Pt = [a.toX, a.toY]
+      const end = start + Math.min(ACTION_MAX_S, Math.max(MIN_ACTION_S, dist(from, to) / SHOT_MPS))
+      const keeper = outcomes.saved?.[index]
+      passes.push(
+        keeper
+          ? { from: a.playerId, to: keeper, startTime: start, endTime: end, passingSpeed: 'fast' }
+          : { from: a.playerId, to: '', target: to, startTime: start, endTime: end, passingSpeed: 'fast' },
+      )
+      plans.push({ action: a, from: [...from], to, start, end })
+      avail[a.playerId] = end
+      length = Math.max(length, end)
+    } else if (a.kind === 'pass') {
       const to = planned[a.to] ?? from
       const end = start + Math.min(ACTION_MAX_S, Math.max(MIN_ACTION_S, dist(from, to) / PASS_MPS))
       passes.push({ from: a.playerId, to: a.to, startTime: start, endTime: end, passingSpeed: 'medium' })
@@ -179,13 +209,13 @@ export function scheduleTurn(actions: BuilderAction[], startPositions: Record<st
       avail[a.playerId] = end
       length = Math.max(length, end)
     }
-  }
+  })
   return { plans, moves, passes, length, planned }
 }
 
 /** The queued turn as a simulator step, with the opponent's defensive AI on. */
-export function turnStep(actions: BuilderAction[], positions: Record<string, Pt>, index: number): PlayStep {
-  const sched = scheduleTurn(actions, positions)
+export function turnStep(actions: BuilderAction[], positions: Record<string, Pt>, index: number, outcomes: TurnOutcomes = {}): PlayStep {
+  const sched = scheduleTurn(actions, positions, outcomes)
   return {
     id: `turn-${index}`,
     index,
@@ -217,7 +247,8 @@ export function buildSnapshots(
 ): TurnSnapshot[] {
   const n = plans.length
   if (n === 0) return []
-  const moverIds = new Set(plans.filter((p) => p.action.kind !== 'pass').map((p) => p.action.playerId))
+  const isMove = (p: ActionPlan) => p.action.kind === 'run' || p.action.kind === 'dribble'
+  const moverIds = new Set(plans.filter(isMove).map((p) => p.action.playerId))
   return plans.map((plan, k) => {
     const i = k + 1
     const positions: Record<string, Pt> = {}
@@ -228,7 +259,7 @@ export function buildSnapshots(
         const end = endPositions[id] ?? start
         const landed = plans
           .slice(0, i)
-          .filter((p) => p.action.kind !== 'pass' && p.action.playerId === id)
+          .filter((p) => isMove(p) && p.action.playerId === id)
           .at(-1)
         if (landed) positions[id] = [...landed.to]
         else if (moverIds.has(id)) positions[id] = [start[0], start[1]]
