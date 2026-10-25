@@ -125,6 +125,43 @@ describe('scheduleTurn', () => {
     expect(s.plans[1].to).toEqual([50, 40]) // pass plan uses c's planned position
   })
 
+  it('a run queued AFTER an incoming pass also starts at once — the receiver runs onto the ball', () => {
+    const s = scheduleTurn(
+      [
+        { kind: 'pass', playerId: 'a', to: 'c' },
+        { kind: 'run', playerId: 'c', toX: 50, toY: 40 },
+      ],
+      positions,
+    )
+    expect(s.moves[0].startTime).toBe(0) // receiver's run concurrent with pass flight
+    expect(s.passes[0].startTime).toBe(0)
+  })
+
+  it('a dribble by the receiver still waits for the ball — he can`t carry what isn`t there yet', () => {
+    const s = scheduleTurn(
+      [
+        { kind: 'pass', playerId: 'a', to: 'c' },
+        { kind: 'dribble', playerId: 'c', toX: 50, toY: 42 },
+      ],
+      positions,
+    )
+    expect(s.moves[0].startTime).toBeCloseTo(s.passes[0].endTime)
+  })
+
+  it('a receiver`s run then dribble: run concurrent, dribble after the ball arrives', () => {
+    const s = scheduleTurn(
+      [
+        { kind: 'pass', playerId: 'a', to: 'c' },           // 20m → 1.111s
+        { kind: 'run', playerId: 'c', toX: 56, toY: 32 },    // 6m → 1s, concurrent with pass
+        { kind: 'dribble', playerId: 'c', toX: 60, toY: 36 }, // waits for ball (and own run)
+      ],
+      positions,
+    )
+    expect(s.moves[0].startTime).toBe(0)                       // run starts at once
+    expect(s.moves[1].startTime).toBeGreaterThanOrEqual(s.passes[0].endTime - 1e-9) // dribble waits for ball
+    expect(s.moves[1].startTime).toBeGreaterThanOrEqual(s.moves[0].endTime - 1e-9)  // and own run chain
+  })
+
   it('an authored delay pushes an action later, but never ahead of its dependencies', () => {
     const s = scheduleTurn(
       [
