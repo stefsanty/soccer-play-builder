@@ -97,12 +97,20 @@ export function derivePlayerActions(step: PlayStep): PlayerActionQueue[] {
 
 // ─── Conflict detection ───────────────────────────────────────────────────────
 
+/**
+ * Moving is never a conflict: a receiver runs onto a pass in flight, a passer makes a support
+ * run while his ball travels. The only impossibility is one player with two overlapping
+ * BALL-BOUND actions (pass/receive) — he can't play two balls at once.
+ */
+const ballBound = (a: ActionItem) => a.type === 'pass' || a.type === 'receive'
+
 export function detectConflicts(actions: ActionItem[]): ActionConflict[] {
   const conflicts: ActionConflict[] = []
-  for (let i = 0; i < actions.length; i++) {
-    for (let j = i + 1; j < actions.length; j++) {
-      const a = actions[i]
-      const b = actions[j]
+  const ball = actions.filter(ballBound)
+  for (let i = 0; i < ball.length; i++) {
+    for (let j = i + 1; j < ball.length; j++) {
+      const a = ball[i]
+      const b = ball[j]
       if (a.startTime < b.endTime && b.startTime < a.endTime) {
         conflicts.push({
           actionIds: [a.id, b.id],
@@ -115,22 +123,24 @@ export function detectConflicts(actions: ActionItem[]): ActionConflict[] {
 }
 
 /**
- * Re-time run actions so they no longer overlap with anything. Pass/receive
- * timings are left unchanged (they depend on ball physics and the passer's
- * authored speed). Runs are pushed to start after any overlapping action ends.
+ * Re-time passes so ball-bound actions no longer overlap: a pass is pushed to start once the
+ * previous pass/receive has finished (its flight duration is kept). Receives are never moved —
+ * their timing belongs to the other player's pass — and runs are never touched (overlapping a
+ * run is legal).
  */
 export function autoFixConflicts(actions: ActionItem[]): ActionItem[] {
   const sorted = [...actions].sort((a, b) => a.startTime - b.startTime)
   let cursor = 0
   return sorted.map((action) => {
-    if (action.type !== 'run') {
+    if (!ballBound(action)) return action
+    if (action.type === 'receive') {
       cursor = Math.max(cursor, action.endTime)
       return action
     }
     const start = Math.max(cursor, action.startTime)
     const dur = Math.max(0.1, action.endTime - action.startTime)
     cursor = start + dur
-    return { ...action, startTime: start, endTime: start + dur }
+    return start === action.startTime ? action : { ...action, startTime: start, endTime: start + dur }
   })
 }
 
