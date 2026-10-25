@@ -17,6 +17,8 @@
  * a rewind snapshot: ⏪ / ▶️ tween through them, and "Replan from here" branches the game from any
  * snapshot, discarding what came after.
  * Mobile-first: turn counter top-right, rewind bottom-left, scrollable action queue at the bottom.
+ * The bottom panel's rows have fixed heights so the pitch never resizes mid-plan; defenders draw
+ * under our team and the holder on top; at most two AI suggestions show, with 44 px ✓/× chips.
  * @props {}
  * @dataDependencies engine/turnBuilder, engine/simulator (simulateStep/sampleTimeline), engine/attackingAI, engine/defaultPlay, engine/follow
  */
@@ -33,6 +35,7 @@ import { SHOT_RANGE_M, distToSegment, rollShot, shotChance } from '@/lib/engine/
 import { dribbleRisk, passRisk, rollRisk, type Defender, type Risk } from '@/lib/engine/risk'
 import { newFollowTrack } from '@/lib/engine/follow'
 import { computeAutoMovements, type PitchState } from '@/lib/engine/attackingAI'
+import { drawOrder, pickSuggestions } from '@/lib/engine/builderHints'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
 import { PitchSurface } from '@/components/editor/PitchSurface'
 import {
@@ -72,6 +75,19 @@ const BLOCK_COLORS: Record<string, string> = {
   shot: 'rgba(255,120,120,0.95)',
 }
 const SHOT_ARROW = 'rgba(255,140,140,0.95)'
+/**
+ * Bottom panel rows have FIXED heights, so the pitch above never resizes while you plan — a queue
+ * chip or the timeline appearing used to shrink the pitch and move every player under your thumb.
+ * The timeline box fits two lanes and scrolls for more.
+ */
+const STATUS_H = 32
+const QUEUE_H = 38
+const TIMELINE_H = 62
+const LANE_H = 20
+const CONTROLS_H = 48
+/** Suggestion ✓ / × chip radius in svg units: 45 ≈ a 44 px target at a 375 px phone width. */
+const CHIP_R = 45
+const PANEL_BODY_H = STATUS_H + 8 + QUEUE_H + 8 + TIMELINE_H + 10 + CONTROLS_H
 /** Chip colour for a chance to score: green when likely, amber when even, red when a long shot. */
 const chanceColor = (p: number) => (p >= 0.5 ? '#16a34a' : p >= 0.25 ? '#d97706' : '#dc2626')
 /** Chip colour for a risk of losing the ball: green when safe, amber when dicey, red when likely lost. */
@@ -264,8 +280,13 @@ export function BuilderClient() {
       ball: { x: holderPos?.[0] ?? PITCH_W / 2, y: holderPos?.[1] ?? PITCH_H / 2, holderId: holder },
       attackingTeam: 'ours',
     }
-    return computeAutoMovements(draftStep, state, new Set()).filter((s) => !dismissed.has(s.playerId))
-  }, [play, phase, inHistory, selected, scrubT, queue, basePositions, holder, dismissed])
+    const all = computeAutoMovements(draftStep, state, new Set()).filter((s) => !dismissed.has(s.playerId))
+    return pickSuggestions(all, {
+      ball: [state.ball.x, state.ball.y],
+      positions: basePositions,
+      isKeeper: (id) => /gk/i.test(labelOf(id)),
+    })
+  }, [play, phase, inHistory, selected, scrubT, queue, basePositions, holder, dismissed, labelOf])
 
   const shownHolder = frame ? frame.ball.holder : viewSnapshot ? viewSnapshot.holder : holder
 
@@ -767,11 +788,12 @@ export function BuilderClient() {
             if (!from) return null
             const a = pt(from[0], from[1])
             const b = pt(s.toX, s.toY)
-            const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
             const len = Math.hypot(b.x - a.x, b.y - a.y) || 1
-            // dismiss chip sits beside the arrowhead (empty pitch), not on the player, so it never
-            // steals the player's own tap target
-            const xChip = { x: b.x + (-(b.y - a.y) / len) * 30, y: b.y + ((b.x - a.x) / len) * 30 }
+            // Chips are 44 px thumb targets (R svg units ≈ 44 css px at phone width). The ✓ sits
+            // 60% along the arrow, the × beside the arrowhead — both off the player, so neither
+            // steals his tap target.
+            const mid = { x: a.x + (b.x - a.x) * 0.6, y: a.y + (b.y - a.y) * 0.6 }
+            const xChip = { x: b.x + (-(b.y - a.y) / len) * (CHIP_R + 24), y: b.y + ((b.x - a.x) / len) * (CHIP_R + 24) }
             return (
               <g key={`sug-${s.playerId}`} data-testid={`suggestion-${s.playerId}`}>
                 <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#86efac" strokeWidth={3} strokeDasharray="10 7" opacity={0.55} markerEnd="url(#builder-arrow-suggest)" pointerEvents="none" />
@@ -795,8 +817,8 @@ export function BuilderClient() {
                     setFlash(`${labelOf(s.playerId)} run queued (AI)`)
                   }}
                 >
-                  <ellipse cx={mid.x} cy={mid.y} rx={26} ry={19} fill="rgba(22,163,74,0.82)" />
-                  <text x={mid.x} y={mid.y + 5} textAnchor="middle" fontSize={17} fill="white" fontWeight={700} pointerEvents="none">✓</text>
+                  <circle cx={mid.x} cy={mid.y} r={CHIP_R} fill="rgba(22,163,74,0.85)" stroke="rgba(255,255,255,0.5)" strokeWidth={2} />
+                  <text x={mid.x} y={mid.y + 9} textAnchor="middle" fontSize={26} fill="white" fontWeight={700} pointerEvents="none">✓</text>
                 </g>
                 <g
                   style={{ cursor: 'pointer' }}
@@ -806,8 +828,8 @@ export function BuilderClient() {
                     setDismissed((prev) => new Set([...prev, s.playerId]))
                   }}
                 >
-                  <circle cx={xChip.x} cy={xChip.y} r={19} fill="rgba(0,0,0,0.52)" />
-                  <text x={xChip.x} y={xChip.y + 5} textAnchor="middle" fontSize={17} fill="#f87171" fontWeight={700} pointerEvents="none">×</text>
+                  <circle cx={xChip.x} cy={xChip.y} r={CHIP_R} fill="rgba(0,0,0,0.6)" stroke="rgba(255,255,255,0.35)" strokeWidth={2} />
+                  <text x={xChip.x} y={xChip.y + 9} textAnchor="middle" fontSize={26} fill="#f87171" fontWeight={700} pointerEvents="none">×</text>
                 </g>
               </g>
             )
@@ -856,8 +878,8 @@ export function BuilderClient() {
               )
             })}
 
-          {/* players */}
-          {play.players.map((p) => {
+          {/* players — defenders underneath, our team above, the ball holder on top (never covered) */}
+          {drawOrder(play.players, shownHolder).map((p) => {
             const pos = renderPositions[p.id] ?? [p.x, p.y]
             const c = pt(pos[0], pos[1])
             const isOurs = p.team === 'ours'
@@ -875,8 +897,8 @@ export function BuilderClient() {
                 }}
                 style={{ cursor: tappable ? 'pointer' : 'default' }}
               >
-                {/* generous tap target */}
-                {tappable && <circle r={26} fill="transparent" />}
+                {/* generous tap target; the holder gets a larger one still */}
+                {tappable && <circle r={isHolder ? 34 : 26} fill="transparent" />}
                 {threats.has(p.id) && <circle r={22} fill="none" stroke="#f87171" strokeWidth={3} opacity={0.6} data-testid="threat-ring" />}
                 {isSel && <circle r={21} fill="none" stroke={BALL} strokeWidth={3.5} opacity={0.95} />}
                 {isHolder && !isSel && <circle r={19} fill="none" stroke="white" strokeWidth={2.5} opacity={0.9} />}
@@ -959,22 +981,27 @@ export function BuilderClient() {
       </div>
 
       {/* bottom panel: status, queue, timeline, controls */}
-      <div className="shrink-0 rounded-t-2xl border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-[max(env(safe-area-inset-bottom),12px)] pt-2.5">
-        <div className="mb-2 min-h-4 text-xs leading-tight text-[var(--app-muted)]" aria-live="polite">
+      <div
+        data-testid="bottom-panel"
+        className="shrink-0 rounded-t-2xl border-t border-[var(--app-line)] bg-[var(--app-card)] px-3 pb-[max(env(safe-area-inset-bottom),12px)] pt-2.5"
+      >
+        <div className="mb-2 overflow-hidden text-xs leading-tight text-[var(--app-muted)]" style={{ height: STATUS_H }} aria-live="polite">
           {status}
         </div>
 
         {phase === 'setup' ? (
-          <button
-            onClick={startGame}
-            disabled={!holder}
-            className="flex h-12 w-full touch-manipulation items-center justify-center gap-2 rounded-[14px] bg-[var(--app-accent)] text-base font-bold text-[var(--app-accent-ink)] transition-all duration-100 active:scale-[0.97] disabled:opacity-40"
-          >
-            Start planning
-          </button>
+          <div className="flex items-center" style={{ height: PANEL_BODY_H - STATUS_H - 8 }}>
+            <button
+              onClick={startGame}
+              disabled={!holder}
+              className="flex h-12 w-full touch-manipulation items-center justify-center gap-2 rounded-[14px] bg-[var(--app-accent)] text-base font-bold text-[var(--app-accent-ink)] transition-all duration-100 active:scale-[0.97] disabled:opacity-40"
+            >
+              Start planning
+            </button>
+          </div>
         ) : (
           <>
-            <div className="no-scrollbar mb-2 flex min-h-[38px] items-center gap-1.5 overflow-x-auto" data-testid="action-queue">
+            <div className="no-scrollbar mb-2 flex items-center gap-1.5 overflow-x-auto" style={{ height: QUEUE_H }} data-testid="action-queue">
               {inHistory ? (
                 <span className="text-xs text-[var(--app-muted)]">{viewSnapshot?.label}</span>
               ) : queue.length === 0 ? (
@@ -1010,16 +1037,18 @@ export function BuilderClient() {
               )}
             </div>
 
-            {/* turn timeline: scrub to preview any moment, drag a block to retime its action */}
-            {schedule && queue.length > 0 && !inHistory && phase === 'plan' && (
-              <div
-                ref={tlRef}
-                data-testid="turn-timeline"
-                className="relative mb-2.5 touch-none select-none overflow-hidden rounded-lg border border-[var(--app-line)] bg-[var(--app-bg)]"
-                style={{ height: 22 + lanes.length * 20 }}
-                onPointerDown={onTlPointerDown}
-                onPointerMove={onTlPointerMove}
-              >
+            {/* turn timeline: scrub to preview any moment, drag a block to retime its action.
+                The box is always there at a fixed height (two lanes; more scroll) so the pitch never moves. */}
+            <div
+              ref={tlRef}
+              data-testid="turn-timeline"
+              className={`relative mb-2.5 touch-none select-none overflow-y-auto overflow-x-hidden rounded-lg border border-[var(--app-line)] bg-[var(--app-bg)] ${schedule && queue.length > 0 && !inHistory && phase === 'plan' ? '' : 'opacity-40'}`}
+              style={{ height: TIMELINE_H }}
+              onPointerDown={onTlPointerDown}
+              onPointerMove={onTlPointerMove}
+            >
+              {schedule && queue.length > 0 && !inHistory && phase === 'plan' ? (
+                <div className="relative" style={{ height: Math.max(TIMELINE_H - 2, 22 + lanes.length * LANE_H) }}>
                 {/* second ticks */}
                 {Array.from({ length: Math.floor(tlDuration) }, (_, i) => i + 1).map((s) => (
                   <div key={s} className="absolute bottom-0 top-0 w-px bg-white/10" style={{ left: `${(s / tlDuration) * 100}%` }}>
@@ -1038,7 +1067,7 @@ export function BuilderClient() {
                       data-testid={`tl-block-${i}`}
                       className="absolute flex h-4 cursor-grab items-center overflow-hidden whitespace-nowrap rounded px-1 text-[9px] font-bold leading-none text-[#0b1015]"
                       style={{
-                        top: 3 + lane * 20,
+                        top: 3 + lane * LANE_H,
                         left: `${(start / tlDuration) * 100}%`,
                         width: `${w}%`,
                         background: BLOCK_COLORS[plan.action.kind],
@@ -1056,8 +1085,13 @@ export function BuilderClient() {
                 {scrubT !== null && (
                   <div className="pointer-events-none absolute bottom-0 top-0 w-0.5 bg-[#ffd43b]" style={{ left: `${scrubT * 100}%` }} />
                 )}
-              </div>
-            )}
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center text-[10px] text-[var(--app-muted)]">
+                  {inHistory ? 'History' : 'Timeline — queue an action to scrub and retime it'}
+                </div>
+              )}
+            </div>
 
             <div className="flex items-center gap-2">
               {/* rewind controls, bottom-left; appear once there is history to walk */}
