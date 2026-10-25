@@ -251,7 +251,7 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
   const passes: PassAnimation[] = [...step.passes].sort((a, b) => a.startTime - b.startTime)
   const passOrigins: Pt[] = step.passes.map(() => [0, 0])
   // a step that opens with a pass starts with the ball at the passer
-  const holderStart = passes.length > 0 && st[passes[0].from] ? passes[0].from : holderStartIn
+  const holderStart: string | null = passes.length > 0 && st[passes[0].from] ? passes[0].from : holderStartIn
 
   // ---- defensive AI bookkeeping ----
   const teams: Team[] = ['ours', 'opp']
@@ -279,23 +279,33 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
   const flight = (p: PassAnimation, t: number, origin: Pt) => {
     const u = Math.min(1, Math.max(0, (t - p.startTime) / (p.endTime - p.startTime)))
     const k = p.isLob ? u : 1 - Math.pow(1 - u, 1.5)
-    const e = bp(p.to, t)
+    const e = p.target ?? bp(p.to, t)
     return { x: origin[0] + (e[0] - origin[0]) * k, y: origin[1] + (e[1] - origin[1]) * k, lift: p.isLob ? Math.sin(Math.PI * u) : 0 }
   }
   /** Ball at time `t` (reference: ballAt). */
   const ballAt = (t: number): BallFrame => {
     let h = holderStart
+    let rest: Pt | null = null // where a shot left the ball lying
     for (let i = 0; i < passes.length; i++) {
       const p = passes[i]
       if (t < p.startTime) break
       const origin = passOriginOf(p)
       if (t < p.endTime) {
         const f = flight(p, t, origin)
-        return { x: f.x, y: f.y, flying: true, lift: f.lift, holder: null, target: p.to }
+        return { x: f.x, y: f.y, flying: true, lift: f.lift, holder: null, target: p.target ? null : p.to }
       }
-      h = p.to
+      if (p.target) {
+        h = null
+        rest = p.target
+      } else {
+        h = p.to
+        rest = null
+      }
     }
-    if (!h || !st[h]) return { x: 0, y: 0, flying: false, lift: 0, holder: null, target: null }
+    if (!h || !st[h]) {
+      if (rest) return { x: rest[0], y: rest[1], flying: false, lift: 0, holder: null, target: null }
+      return { x: 0, y: 0, flying: false, lift: 0, holder: null, target: null }
+    }
     const q = bp(h, t)
     return { x: q[0], y: q[1], flying: false, lift: 0, holder: h, target: h }
   }

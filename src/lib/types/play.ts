@@ -105,7 +105,10 @@ export interface PlayerMove {
 
 export interface PassAnimation {
   from: string        // player id
+  /** Receiver id; '' when the ball flies to `target` instead (a shot). */
   to: string
+  /** A spot the ball flies to and rests at, nobody receiving it (a shot at goal). */
+  target?: [number, number]
   startTime: number
   endTime: number
   isLob?: boolean

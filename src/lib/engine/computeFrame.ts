@@ -76,12 +76,12 @@ export function computeFrame(play: Play | null | undefined, stepIndex: number, t
   for (const pass of passes) {
     if (time < pass.startTime) break
     if (time <= pass.endTime && pass.endTime > pass.startTime) { flying = pass; break }
-    holder = pass.to
+    holder = pass.target ? null : pass.to
   }
 
   if (flying) {
     const from = pos.get(flying.from)
-    const to = pos.get(flying.to)
+    const to = flying.target ?? pos.get(flying.to)
     if (from && to) {
       const progress = windowT(time, flying.startTime, flying.endTime)
       const b = passFlight(from, to, progress, flying.isLob)
