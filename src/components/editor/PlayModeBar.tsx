@@ -11,6 +11,7 @@
  */
 
 import { ChevronLeft, ChevronRight, Pause, Pencil, Play as PlayIcon, RotateCcw } from 'lucide-react'
+import { narrate } from '@/lib/engine/stepMeta'
 import { useEditorStore } from '@/lib/store/editorStore'
 import { haptic } from '@/lib/haptics'
 import { BAR_HEIGHT } from './RunsPanel'
@@ -69,6 +70,7 @@ export function PlayModeBar({ onEnterEdit }: PlayModeBarProps) {
   }
   const ariaLabel = (i: number, title: string) =>
     i < SETUP_COUNT ? `Setup — ${title}` : `Step ${i - (SETUP_COUNT - 1)} — ${title}`
+  const labelOf = (id: string) => play.players.find((p) => p.id === id)?.label ?? id
 
   return (
     <div className="shrink-0" data-testid="play-mode-bar">
@@ -85,6 +87,7 @@ export function PlayModeBar({ onEnterEdit }: PlayModeBarProps) {
             {play.steps.map((st, i) => {
               const setup = i < SETUP_COUNT
               const active = i === currentStepIndex
+              const marker = setup ? '' : narrate(st, labelOf)
               return (
                 <button
                   key={st.id}
@@ -108,6 +111,7 @@ export function PlayModeBar({ onEnterEdit }: PlayModeBarProps) {
                   }`}
                 >
                   {label(i, st.title, !!st.isAltBranch, st.altLabel)}
+                  {marker && <span className="ml-1.5 whitespace-nowrap text-[10px] font-semibold opacity-70">{marker}</span>}
                 </button>
               )
             })}

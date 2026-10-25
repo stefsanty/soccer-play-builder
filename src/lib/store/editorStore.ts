@@ -45,7 +45,12 @@ interface EditorState {
   removeStep: (index: number) => void
   updateStep: (index: number, update: Partial<PlayStep>) => void
   movePlayer: (playerId: string, toX: number, toY: number, stepIndex: number, endTime?: number) => void
-  addPass: (pass: PassAnimation, stepIndex: number) => void
+  /**
+   * Add a pass. One pass per step — its completion is the step boundary — so a second pass
+   * starts a NEW step inserted right after `stepIndex` (and selects it). Returns where the
+   * pass landed and whether a step was created.
+   */
+  addPass: (pass: PassAnimation, stepIndex: number) => { stepIndex: number; created: boolean }
   removePass: (stepIndex: number, passIndex: number) => void
   updatePass: (stepIndex: number, passIndex: number, update: Partial<PassAnimation>) => void
   removeMove: (stepIndex: number, playerId: string) => void
@@ -155,11 +160,44 @@ export const useEditorStore = create<EditorState>()(
       else step.moves.push(move)
       s.isDirty = true
     }),
-    addPass: (pass, stepIndex) => set((s) => {
-      if (!s.play) return
-      s.play.steps[stepIndex].passes.push(pass)
-      s.isDirty = true
-    }),
+    addPass: (pass, stepIndex) => {
+      let result = { stepIndex, created: false }
+      set((s) => {
+        const step = s.play?.steps[stepIndex]
+        if (!s.play || !step) return
+        if (step.passes.length === 0) {
+          step.passes.push(pass)
+          s.isDirty = true
+          return
+        }
+        // Every end of a pass is the start of the next step: the second pass goes into a new
+        // step inserted right after this one. Continuing an alt branch stays on the branch.
+        const insertAt = stepIndex + 1
+        const newStep: PlayStep = {
+          id: crypto.randomUUID(),
+          index: insertAt,
+          title: `Step ${insertAt + 1}`,
+          duration: 0,
+          moves: [],
+          passes: [pass],
+          defenderRules: {},
+          faceTargets: [],
+          ...(step.isAltBranch ? { isAltBranch: true, altFrom: stepIndex, altAfter: step.altAfter } : {}),
+        }
+        s.play.steps.splice(insertAt, 0, newStep)
+        s.play.steps.forEach((st, i) => {
+          st.index = i
+          if (st === newStep) return
+          // branch pointers aimed at steps that shifted down keep pointing at the same step
+          if (st.altFrom !== undefined && st.altFrom >= insertAt) st.altFrom += 1
+          if (st.altAfter !== undefined && st.altAfter >= insertAt) st.altAfter += 1
+        })
+        s.currentStepIndex = insertAt
+        s.isDirty = true
+        result = { stepIndex: insertAt, created: true }
+      })
+      return result
+    },
     removePass: (stepIndex, passIndex) => set((s) => {
       if (!s.play) return
       s.play.steps[stepIndex]?.passes.splice(passIndex, 1)
