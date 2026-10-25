@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react'
 import { Pause, Play as PlayIcon } from 'lucide-react'
 import type { PlayStep } from '@/lib/types/play'
+import { stepDuration } from '@/lib/engine/stepMeta'
 import type { AnimationEngine } from '@/lib/hooks/useAnimationEngine'
 
 export const STEP_PANEL_HEIGHT = 124 // px (matches StepTextPanel)
@@ -17,7 +18,8 @@ interface StepTimelineProps {
 }
 
 export function StepTimeline({ badge, title, stepLabel, step, engine, body }: StepTimelineProps) {
-  const dur = step.duration > 0 ? step.duration : 3
+  // Derived step length (matches the animation engine); nominal 3 s track for an empty step.
+  const dur = stepDuration(step) || 3
 
   const handleTrackDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId)

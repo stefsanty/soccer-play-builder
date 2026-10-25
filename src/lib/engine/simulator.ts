@@ -18,6 +18,7 @@
 import type { AiConfig, AiRole, DefenderRule, FaceTarget, PassAnimation, Play, PlayStep, PlayerMove } from '@/lib/types/play'
 import { trapezoid } from '@/lib/engine/physics'
 import { baseStepIndex, ballHolderBefore, setupBallPosition } from '@/lib/engine/ballHolder'
+import { stepDuration } from '@/lib/engine/stepMeta'
 import { computeAiTargets, type AiWorld, type Duty, type Team } from '@/lib/engine/ai'
 import { followTarget, newFollowTrack, pickHandoff, trackExit, type FollowTrack, type HandoffCandidate } from '@/lib/engine/follow'
 
@@ -208,7 +209,7 @@ const ruleAttacker = (r: DefenderRule | null): string | null =>
  * inherits exactly from where the previous step ended rather than being recomputed from the holder's facing. */
 export function simulateStep(play: Play, stepIndex: number, start: SimState, holderStartIn: string | null, startBall?: Pt): StepTimeline {
   const step: PlayStep = play.steps[stepIndex]
-  const duration = step.duration > 0 ? step.duration : 0
+  const duration = stepDuration(step)
   const n = Math.round(duration / H)
   const st = cloneState(start)
   const ids = Object.keys(st)

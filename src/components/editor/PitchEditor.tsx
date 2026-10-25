@@ -231,7 +231,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
     } else {
       const startPos = (prevPositions ?? positions).get(id)
       const dist = startPos ? Math.hypot(m.x - startPos.x, m.y - startPos.y) : 0
-      const runEnd = dist > 0 ? dist / RUN_SPEED_MPS.jog : (step?.duration ?? 4)
+      const runEnd = dist > 0 ? dist / RUN_SPEED_MPS.jog : 1 // zero-distance run: a nominal beat
       movePlayer(id, m.x, m.y, currentStepIndex, runEnd)
     }
     haptic(15)
@@ -333,7 +333,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
         const fromPos = (prevPositions ?? positions).get(pendingFrom)
         const toPos = (prevPositions ?? positions).get(id)
         const dist = fromPos && toPos ? Math.hypot(toPos.x - fromPos.x, toPos.y - fromPos.y) : 0
-        const passEnd = dist > 0 ? dist / PASS_SPEED_MPS.medium : step.duration
+        const passEnd = dist > 0 ? dist / PASS_SPEED_MPS.medium : 1 // zero-distance pass: a nominal beat
         addPass({ from: pendingFrom, to: id, startTime: 0, endTime: passEnd, passingSpeed: 'medium' }, currentStepIndex)
         haptic(15)
         announce(`Pass added: ${labelOf(pendingFrom)} to ${labelOf(id)}`)
@@ -719,7 +719,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                     const fromPos = (prevPositions ?? positions).get(pass.from)
                     const toPos = (prevPositions ?? positions).get(pass.to)
                     const dist = fromPos && toPos ? Math.hypot(toPos.x - fromPos.x, toPos.y - fromPos.y) : 0
-                    const newEnd = dist > 0 ? pass.startTime + dist / PASS_SPEED_MPS[s] : step.duration
+                    const newEnd = dist > 0 ? pass.startTime + dist / PASS_SPEED_MPS[s] : pass.endTime
                     updatePass(currentStepIndex, selectedAction.index, { passingSpeed: s, endTime: newEnd })
                   }}
                   className={`rounded-full px-3 py-1 text-xs font-semibold transition-all active:scale-95 ${
@@ -748,7 +748,7 @@ export function PitchEditor({ play: playProp, onUpdate }: PitchEditorProps = {})
                 onClick={() => {
                   const startPos = (prevPositions ?? positions).get(move.playerId)
                   const dist = startPos ? Math.hypot(move.toX - startPos.x, move.toY - startPos.y) : 0
-                  const newEnd = dist > 0 ? move.startTime + dist / RUN_SPEED_MPS[s] : step.duration
+                  const newEnd = dist > 0 ? move.startTime + dist / RUN_SPEED_MPS[s] : move.endTime
                   updateMove(currentStepIndex, move.playerId, { runningSpeed: s, endTime: newEnd })
                 }}
                 className={`rounded-full px-3 py-1 text-xs font-semibold transition-all active:scale-95 ${
