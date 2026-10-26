@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import { scheduleTurn, type BuilderAction } from '@/lib/engine/turnBuilder'
-import { FWD_BACK_MAX, MAX_JOB_DROP, planTeamShape, type ShapeInput, type SupportMove } from '@/lib/engine/teamShape'
+import { FWD_BACK_MAX, MAX_JOB_DROP, SPACING_M, planTeamShape, type ShapeInput, type SupportMove } from '@/lib/engine/teamShape'
 
 type Pt = [number, number]
 
@@ -82,5 +82,24 @@ describe('review: the carrier, build-up from the back, back passes', () => {
     expect(byId(moves, 'o-LCM')?.reason).toBe('support')
     expect(byId(moves, 'o-RM')?.reason).toBe('wide')
     for (const m of moves) expect(drop(m)).toBeLessThanOrEqual(0.1)
+  })
+
+  it('R6 — a run that cannot get past the carrier in time stops short of him instead of running into him', () => {
+    // RCM dribbles sideways to the right touchline; RB (25 m behind) overlaps but cannot get ahead inside the turn
+    const q: BuilderAction[] = [{ kind: 'dribble', playerId: 'o-RCM', toX: 61, toY: 38 }]
+    const inp = input(q, 'o-RCM')
+    const moves = planTeamShape(inp)
+    const ball = inp.schedule.planned['o-RCM']
+    const rb = byId(moves, 'o-RB')!
+    expect(rb.reason).toBe('overlap')
+    // he goes the right way, up the line, and arrives at the carrier's shoulder, not on top of him
+    expect(rb.to[1]).toBeGreaterThan(rb.from[1] + 8)
+    expect(Math.hypot(rb.to[0] - ball[0], rb.to[1] - ball[1])).toBeGreaterThanOrEqual(SPACING_M - 1e-6)
+    // nobody who started outside the carrier's space ends inside it (RM starts 3.6 m from where the ball
+    // arrives and can only step aside, which the spacing rule does)
+    for (const m of moves) {
+      if (Math.hypot(m.from[0] - ball[0], m.from[1] - ball[1]) < SPACING_M) continue
+      expect(Math.hypot(m.to[0] - ball[0], m.to[1] - ball[1])).toBeGreaterThanOrEqual(SPACING_M - 0.01)
+    }
   })
 })

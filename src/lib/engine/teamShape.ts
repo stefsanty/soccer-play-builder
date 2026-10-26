@@ -112,6 +112,20 @@ const CONSTRAINT_ROUNDS = 3
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1])
+/** The point on the path from `from` to `to` where it first comes within `r` of `p` (`from` itself when the path never does). */
+function stopShort(from: Pt, to: Pt, p: Pt, r: number): Pt {
+  const dx = to[0] - from[0]
+  const dy = to[1] - from[1]
+  const ex = from[0] - p[0]
+  const ey = from[1] - p[1]
+  const a = dx * dx + dy * dy
+  const b = 2 * (ex * dx + ey * dy)
+  const c = ex * ex + ey * ey - r * r
+  const disc = b * b - 4 * a * c
+  if (a < 1e-9 || disc < 0) return from
+  const s = clamp((-b - Math.sqrt(disc)) / (2 * a), 0, 1)
+  return [from[0] + dx * s, from[1] + dy * s]
+}
 const isKeeperLabel = (label: string) => /gk/i.test(label)
 
 /** How long the turn lasts, the same way turnStep derives it (the AI moves must fit inside). */
@@ -433,6 +447,18 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
   for (const id of free) {
     capMove(id)
     bound(id)
+  }
+  // A free player never finishes on top of a teammate the user placed (the carrier at the ball's end, a
+  // commanded player, a receiver). The cap and the touchline bound above can undo the spacing push, so
+  // when they would land him inside that space he stops short along his own path: the overlapping
+  // full-back who cannot get past the carrier in time arrives at his shoulder, he does not run into him.
+  for (const id of free) {
+    const c = cur(id)
+    for (const f of frozenFinal) {
+      const t = target.get(id)!
+      if (dist(t, f) >= SPACING_M || dist(c, f) < SPACING_M) continue
+      target.set(id, stopShort(c, t, f, SPACING_M))
+    }
   }
 
   // 7. deadband and timing
