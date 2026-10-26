@@ -25,6 +25,9 @@
  * under our team and the holder on top; at most two AI suggestions show, with 44 px ✓/× chips.
  * The game is a Play (setup + one step per turn): the header's Save stores it through the editor's
  * save path, and leaving with unsaved turns asks first (back arrow confirm + beforeunload).
+ * Win condition (engine/builderGame.ts): score within TURN_LIMIT turns. The counter reads "Turn 3/6";
+ * a goal in time shows a win card (play on, or new game); no goal after the last turn shows an
+ * "out of turns" card (rewind and replan, or new game).
  * A game saved from here carries builder bookkeeping on each step; /builder/[id] reopens it and the
  * history, score and holder are rebuilt by re-simulating the steps (engine/builderReplay.ts).
  * @props { initialPlay?: Play } — a saved game to reopen; omitted = a new game
@@ -46,6 +49,7 @@ import { computeAutoMovements, type PitchState } from '@/lib/engine/attackingAI'
 import { drawOrder, pickSuggestions } from '@/lib/engine/builderHints'
 import { builderTitle, hasUnsavedWork } from '@/lib/engine/builderSave'
 import { replayGame } from '@/lib/engine/builderReplay'
+import { TURN_LIMIT, gameOutcome, turnCounterLabel, turnsLeft } from '@/lib/engine/builderGame'
 import { SaveButton } from '@/components/editor/SaveButton'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
 import { PitchSurface } from '@/components/editor/PitchSurface'
@@ -171,6 +175,8 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const [confirmClear, setConfirmClear] = useState(false)
   // Goals scored so far (header chip) and the GOAL! / SAVED banner, shown the moment it happens in playback.
   const [score, setScore] = useState(0)
+  // The end card (won / out of turns) shows once per outcome; "Play on" closes it, a replan re-arms it.
+  const [endCardClosed, setEndCardClosed] = useState(false)
   const [goalBanner, setGoalBanner] = useState<{ kind: BannerKind; title: string; sub: string; preview: boolean } | null>(null)
   const [timeline, setTimeline] = useState<StepTimeline | null>(null)
   const [progress, setProgress] = useState(0)
@@ -229,12 +235,16 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const returnToRef = useRef<string | null>(null)
 
   const running = phase === 'playing' || phase === 'preview'
+  const turnsPlayed = turn - 1
+  const outcome = gameOutcome(turnsPlayed, score)
   const dirty = !!play && hasUnsavedWork({ stepCount: play.steps.length, queued: queue.length, savedStepCount })
 
   // Leaving with unsaved turns: the browser's own prompt on reload / close…
+  const leaveConfirmedRef = useRef(false)
   useEffect(() => {
     if (!dirty) return
     const warn = (e: BeforeUnloadEvent) => {
+      if (leaveConfirmedRef.current) return
       e.preventDefault()
     }
     window.addEventListener('beforeunload', warn)
@@ -244,6 +254,12 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const confirmLeave = (e: React.MouseEvent) => {
     if (!dirty) return
     if (!window.confirm('Leave the Turn Builder? This game is not saved and will be lost.')) e.preventDefault()
+  }
+  /** The end card's "New game": a full reload of /builder (a Link to the same route would not reset the game). */
+  const newGame = () => {
+    if (dirty && !window.confirm('Start a new game? This game is not saved and will be lost.')) return
+    leaveConfirmedRef.current = true
+    window.location.assign('/builder')
   }
 
   useEffect(() => {
@@ -292,6 +308,8 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
 
   const inHistory = historyIdx !== null
   const viewSnapshot = inHistory ? history[historyIdx] : null
+  // …after the GOAL! banner has gone, so the two never stack.
+  const showEndCard = phase === 'plan' && !inHistory && !running && !goalBanner && outcome !== 'playing' && !endCardClosed
 
   // The queued chain laid out in time: ghost arrows come from its plans and the range disc / gating
   // from its planned (post-move) positions, so a second queued run departs from the first one's target.
@@ -722,6 +740,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     setHistoryIdx(null)
     setQueue([])
     setSelected(null)
+    setEndCardClosed(false)
     setFlash(`Replanning from ${snap.turn === 0 ? 'kick-off' : `turn ${snap.turn}`} — later turns discarded`)
   }
 
@@ -802,7 +821,9 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                     ? `${labelOf(selected)} will have the ball — tap a teammate to pass, or the pitch to run and meet it`
                     : `${labelOf(selected)} has the ball — tap a teammate to pass, the pitch to dribble, or the goal to shoot`
                   : `${labelOf(selected)} — tap the pitch to queue a run (beyond the area = max-distance run)`
-                : 'Tap a blue player to select; actions chain in queue order'
+                : outcome === 'playing' && turnsLeft(turnsPlayed) === 1
+                  ? `Last turn — score now, or rewind and replan`
+                  : 'Tap a blue player to select; actions chain in queue order'
 
   // timeline lanes: one row per player that has actions, in order of first appearance
   const lanes: string[] = []
@@ -825,7 +846,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
             </div>
           )}
           <div data-testid="turn-counter" className="rounded-full border border-white/10 bg-[var(--app-card)] px-3 py-1 text-sm font-semibold">
-            {phase === 'setup' ? 'Setup' : `Turn ${inHistory && viewSnapshot ? viewSnapshot.turn : turn}`}
+            {phase === 'setup' ? 'Setup' : inHistory && viewSnapshot ? `Turn ${viewSnapshot.turn}` : turnCounterLabel(turn, outcome)}
           </div>
           {/* Save the game as a play (the editor's own save path): setup + one step per resolved turn */}
           {phase !== 'setup' && (
@@ -1098,6 +1119,55 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                 {goalBanner.title}
               </div>
               <div className="mt-1 max-w-[260px] text-xs font-semibold text-[var(--app-muted)]">{goalBanner.sub}</div>
+            </div>
+          </div>
+        )}
+        {showEndCard && (
+          <div
+            data-testid="end-card"
+            data-outcome={outcome}
+            role="dialog"
+            aria-label={outcome === 'won' ? 'You scored' : 'Out of turns'}
+            className="absolute inset-0 flex items-center justify-center bg-[rgba(11,16,21,0.55)] p-6 backdrop-blur-[2px]"
+          >
+            <div className="w-full max-w-[300px] rounded-2xl border border-white/10 bg-[var(--app-card)] p-5 text-center shadow-2xl">
+              <div className={`text-3xl font-black tracking-tight ${outcome === 'won' ? 'text-[#ffd43b]' : 'text-[#ff8a8a]'}`}>
+                {outcome === 'won' ? 'YOU SCORED' : 'OUT OF TURNS'}
+              </div>
+              <div className="mt-1.5 text-sm text-[var(--app-muted)]">
+                {outcome === 'won'
+                  ? `Goal in turn ${turnsPlayed} of ${TURN_LIMIT}. Play on, or start a new game.`
+                  : `No goal in ${TURN_LIMIT} turns. Rewind to any action and replan from there, or start again.`}
+              </div>
+              <div className="mt-4 flex flex-col gap-2">
+                {outcome === 'won' ? (
+                  <button
+                    onClick={() => setEndCardClosed(true)}
+                    data-testid="end-play-on"
+                    className="h-12 touch-manipulation rounded-[14px] bg-[var(--app-accent)] text-base font-bold text-[var(--app-accent-ink)] active:scale-[0.97]"
+                  >
+                    Play on
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setEndCardClosed(true)
+                      rewind()
+                    }}
+                    data-testid="end-rewind"
+                    className="h-12 touch-manipulation rounded-[14px] bg-[var(--app-accent)] text-base font-bold text-[var(--app-accent-ink)] active:scale-[0.97]"
+                  >
+                    Rewind and replan
+                  </button>
+                )}
+                <button
+                  onClick={newGame}
+                  data-testid="end-new-game"
+                  className="h-12 touch-manipulation rounded-[14px] border border-[var(--app-line)] bg-[var(--app-bg)] text-base font-semibold text-[#e8edf2] active:scale-[0.97]"
+                >
+                  New game
+                </button>
+              </div>
             </div>
           </div>
         )}
