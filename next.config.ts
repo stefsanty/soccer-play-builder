@@ -10,6 +10,9 @@ const { version } = JSON.parse(
 
 const nextConfig: NextConfig = {
   env: { NEXT_PUBLIC_APP_VERSION: version },
+  // The dev-tools badge sat on the builder's bottom-left button at phone width and swallowed real
+  // taps (Rewind, then Preview), so the dev build could not be playtested on a phone. Dev only.
+  devIndicators: false,
   async redirects() {
     return [
       // Queue-and-play prototype: a self-contained static page served from public/.
