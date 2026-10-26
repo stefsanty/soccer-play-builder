@@ -1,9 +1,11 @@
 // Attacking AI — team shape: where the off-ball teammates go while the user's command plays out.
 //
 // The user commands one player (or a few). Everybody else on the attacking team is moved by this
-// solver the way teammates move in Football Manager / FIFA / PES: the formation is a block anchored on
-// the ball that lifts and slides with it a little every turn, and a few players near the ball break
-// the shape for a support angle, a wide outlet, a run beyond, an overlap, or a box run on a shot.
+// solver the way teammates move in Football Manager / FIFA / PES / RoboCup agent2d: every player has a
+// spot for each ball position, read from a ball-position formation table (engine/formationTable.ts), so
+// the whole block moves up and across with the ball — whoever carries it — keeping its line distances;
+// and a few players near the ball break the shape for a support angle, a wide outlet, a run beyond,
+// an overlap, or a box run on a shot.
 // Football principles behind each rule: docs/attacking-ai-spec.md §2.
 //
 // Pure and deterministic: a function of the turn start, the formation homes and the user's queue.
@@ -14,6 +16,7 @@
 import type { PlayerMove } from '@/lib/types/play'
 import { PITCH_H, PITCH_W } from '@/lib/engine/pitch'
 import { MIN_ACTION_S, MOVE_MPS, holderAfter, turnSeconds, type BuilderAction, type TurnSchedule } from '@/lib/engine/turnBuilder'
+import { TABLE_HOMES, roleFor, tableSlots } from '@/lib/engine/formationTable'
 
 type Pt = [number, number]
 type Team = 'ours' | 'opp'
@@ -60,12 +63,6 @@ export type Phase = 'forward' | 'back' | 'lateral' | 'shot'
 export const LINE_GAP_M = 8
 /** A home this far from the centre line makes a player "wide" (holds width on the far side). */
 export const WIDE_M = 18
-/** How much of the ball's height above the midfield home line each line follows. */
-export const LIFT: Record<Exclude<LineRole, 'gk'>, number> = { def: 0.6, mid: 1, fwd: 1 }
-/** The defence never goes further than this (5 m past halfway): rest defence. */
-export const DEF_MAX_DEPTH = PITCH_H / 2 + 5
-export const SHIFT_K = 0.35
-export const SHIFT_MAX = 10
 /** Support angle: beside and behind the carrier. */
 export const SUP_SIDE = 9
 export const SUP_BACK = 5
@@ -82,8 +79,9 @@ export const OVERLAP_MAX_BEHIND = 35
 export const CARRIER_WIDE_M = 16
 /** With the ball this deep, the run beyond becomes a far-post run. */
 export const BOX_DEPTH = 80
-/** Per-turn cap on a shape move: the block drifts, it does not teleport. */
-export const MAX_SHAPE_M = 12
+/** Per-turn cap on a shape move — what a jog covers in a long (3.3 s) turn, so a 20 m carry takes the
+ *  whole block with it; shorter turns are capped by the time itself (MOVE_MPS × turn length). */
+export const MAX_SHAPE_M = 20
 /** Per-turn cap on a triggered run (support, wide, depth, overlap, box). */
 export const MAX_RUN_M = 18
 export const SPACING_M = 7
@@ -231,24 +229,31 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
   const advance = ball[1] - D(positions[holder][1])
   const phase = turnPhase(advance, queue)
   const ballSide: 1 | -1 = ball[0] >= CENTRE_X ? 1 : -1
+  const defCarrier = lines.role(endCarrier) === 'def' || lines.role(endCarrier) === 'gk'
 
   // offside line: the second-last opponent (keeper included), never inside our own half
   const oppDepths = opp.map((p) => D(positions[p.id][1])).sort((a, b) => b - a)
   const offsideCap = Math.max(PITCH_H / 2, (oppDepths[1] ?? oppDepths[0] ?? PITCH_H) - OFFSIDE_MARGIN)
 
-  const lift = Math.max(0, ball[1] - lines.midHomeDepth)
-  const shift = clamp((ball[0] - CENTRE_X) * SHIFT_K, -SHIFT_MAX, SHIFT_MAX)
-
   const cur = (id: string): Pt => xd(positions[id])
   const home = (id: string): Pt => xd(homes[id] ?? positions[id])
 
-  // 3. shape target for every free player
-  const shapeX = (id: string) => home(id)[0] + (lines.wide(id) && lines.side(id) !== ballSide ? 0 : shift)
+  // 3. shape target for every free player: his spot in the formation table for where the ball ends,
+  //    plus his own offset from the 4-4-2 home his role is written for (0 in the default 4-4-2). The
+  //    table is in the attacker's own frame, so an attacking 'opp' team is mirrored across.
+  const mirror = (p: Pt): Pt => (dir === 1 ? p : [PITCH_W - p[0], p[1]])
+  const slots = tableSlots(mirror(ball))
+  const roles = new Map(players.filter((p) => p.team === attackingTeam).map((p) => [p.id, roleFor(p.label, mirror(home(p.id)))] as const))
+  const slotOf = (id: string): Pt => {
+    const r = roles.get(id)!
+    const h = mirror(home(id))
+    return mirror([slots[r][0] + h[0] - TABLE_HOMES[r][0], slots[r][1] + h[1] - TABLE_HOMES[r][1]])
+  }
   const shapeTarget = (id: string): Pt => {
-    const role = lines.role(id) as Exclude<LineRole, 'gk'>
+    const role = lines.role(id)
     const c = cur(id)
-    let d = home(id)[1] + lift * LIFT[role]
-    if (role === 'def') d = Math.min(d, DEF_MAX_DEPTH)
+    const [x, slotD] = slotOf(id)
+    let d = slotD
     if (phase === 'back') {
       if (role === 'def') return c
       // the midfield drops with the ball (half its retreat); the forwards hold the line so the team
@@ -258,7 +263,7 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
       // the ball goes forward: nobody drops
       d = Math.max(d, c[1])
     }
-    return [shapeX(id), d]
+    return [x, d]
   }
 
   const jobs = new Map<string, Job>()
@@ -311,8 +316,12 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
       const c = cur(runner)
       if (ball[1] >= BOX_DEPTH) jobs.set(runner, { to: farPost, reason: 'depth' })
       // a forward already beyond the run's end IS the depth: he holds his height (the shape lifts him)
-      // instead of dropping toward a deep carrier
-      else if (c[1] < ball[1] + DEPTH_RUN) jobs.set(runner, { to: [c[0] + (ball[0] - c[0]) * 0.3, ball[1] + DEPTH_RUN], reason: 'depth' })
+      // instead of dropping toward a deep carrier. The run never ends below his table spot either: with
+      // a defender carrying, "beyond the ball" is still well short of where the forward line belongs.
+      else {
+        const runTo = Math.max(ball[1] + DEPTH_RUN, slotOf(runner)[1])
+        if (c[1] < runTo) jobs.set(runner, { to: [c[0] + (ball[0] - c[0]) * 0.3, runTo], reason: 'depth' })
+      }
     }
     // the overlap: a deeper wide player on the carrier's side
     if (Math.abs(ball[0] - CENTRE_X) >= CARRIER_WIDE_M) {
@@ -328,7 +337,7 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
     for (const id of cands) {
       if (given >= 2) break
       if (lines.wide(id)) {
-        const slot: Pt = [shapeX(id), ball[1] + WIDE_AHEAD]
+        const slot: Pt = [slotOf(id)[0], Math.max(ball[1] + WIDE_AHEAD, slotOf(id)[1])]
         if (taken(slot)) continue
         jobs.set(id, { to: slot, reason: 'wide' })
         given++
@@ -336,8 +345,11 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
       }
       const c = cur(id)
       const s: 1 | -1 = c[0] - ball[0] > 0 ? 1 : -1
-      const own: Pt = [ball[0] + s * SUP_SIDE, ball[1] - SUP_BACK]
-      const other: Pt = [ball[0] - s * SUP_SIDE, ball[1] - SUP_BACK]
+      // under a midfield or forward carrier the angle is beside-and-behind; a defender carrying up has his
+      // cover behind him already (the other centre-back, the keeper), so the angle is beside-and-ahead
+      const sd = defCarrier ? SUP_BACK : -SUP_BACK
+      const own: Pt = [ball[0] + s * SUP_SIDE, ball[1] + sd]
+      const other: Pt = [ball[0] - s * SUP_SIDE, ball[1] + sd]
       const slot = !taken(own) ? own : !taken(other) ? other : null
       if (!slot) continue
       jobs.set(id, { to: slot, reason: 'support' })

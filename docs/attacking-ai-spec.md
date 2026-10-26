@@ -315,3 +315,48 @@ Four did not; each is now a rule with a test in `teamShape.review.test.ts`.
 Unchanged on purpose (choices for Stefan): no support cast in a 'back' turn (a short safe option
 beside a retreating carrier, as FIFA shows, would be one more job); the second-last opponent is
 read at the turn start; the keeper never moves.
+
+## 8. Formation table (2026-10-26, v0.44.0)
+
+### 8.1 The problem
+Stefan: "when LCB moves up with the ball, the team doesn't move up with the LCB." Reproduced on
+v0.42.2: LCB carries 20 m (18 m → 38 m). RCB moves up 2 m, RB 0 m, the midfield 3 m, the forwards
+3 m. LCB ends level with his own midfield. Cause: the block lift was `ball depth − midfield home
+depth (35 m)`, so a carry inside our own half gave almost no lift (3 m × 0.6 for the defence). The
+60% defensive lift, the 5 m cap and the 12 m per-turn shape cap made it smaller still.
+
+### 8.2 Is there a library or ready-made solution?
+No drop-in library for a JavaScript turn-based builder. The ready-made *methods*:
+
+| Method | What it is | Fit |
+|---|---|---|
+| **RoboCup 2D formation table** (HELIOS / agent2d, `rcsc::formation::FormationDT`, edited with fedit2) | Sample ball positions, each with all 11 player positions. For any ball position, Delaunay-triangulate the samples and interpolate inside the triangle. | **Best fit.** Small, deterministic, data not rules, a coach can tune it. ~100 lines. |
+| Football Manager positioning by ball zone | Each role has a spot per ball zone (the pitch cut into ~18 zones). | Same idea as the table, but with steps between zones instead of smooth interpolation. |
+| Influence maps / pitch control (Spearman 2017) | For each pitch spot, which team gets there first. | Good for *judging* space (support spots, pass risk), heavy for producing a shape. A later add-on for support runs. |
+| Google Research Football built-in AI | The rule-based C++ AI of the GameplayFootball engine. | Not a library we can call from the web app. Too heavy to port. |
+
+Recommendation (done): the agent2d-style formation table, with the existing support cast (support
+angles, run beyond, overlap, box runs, pass-and-move, rest defence, offside, spacing) on top.
+
+### 8.3 Design (`engine/formationTable.ts`)
+- Samples on a grid: ball x ∈ {6, 34, 62} × ball depth ∈ {10, 25, 40, 55, 70, 85, 100}. The centre
+  and left columns are data; the right column is the left one mirrored (L↔R roles).
+- A grid cell split in two triangles is a Delaunay triangulation, so the interpolation is
+  barycentric inside the triangle that holds the ball (no library).
+- The data keeps the lines 10–16 m apart. The centre-backs follow the ball at about two thirds and
+  stop at 57 m (rest defence). The full-backs push on once the ball is in the other half. With the
+  ball wide, the block slides across, the far full-back tucks in and the far winger keeps his width.
+- A player's role is his label (LB … RST); any other label gets the role whose 4-4-2 home is
+  nearest, plus his own offset from that home.
+- `teamShape.ts` step 3 now reads the slot from the table for where the ball ends. The phase
+  guards stay (forward: nobody drops; back: the defence holds, the forwards drop ≤ 3 m).
+- The run beyond and the wide outlet never end below the runner's table spot. With a defender
+  carrying, the support angles are beside-and-ahead (his cover is already behind him).
+- `MAX_SHAPE_M` 12 → 20 m: in a 3.3 s turn the whole block can follow a 20 m carry. Shorter
+  turns are capped by time (6 m/s × turn length).
+- Removed: `LIFT`, `DEF_MAX_DEPTH`, `SHIFT_K`, `SHIFT_MAX` (the table holds these choices now).
+
+### 8.4 Result (same LCB carry, 18 m → 38 m)
+RCB +9 m (stays as cover), LB +19 m, RB +20 m, LCM +9 m (beside-and-ahead), RCM +10 m, LM +18 m,
+RM +20 m, LST +17 m, RST +17 m. Tests: `teamShape.carry.test.ts` (LCB, LCM and LB carries; the LCB
+and LB cases fail on the old solver).
