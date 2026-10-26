@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
 import { initialState, simulateStep } from '@/lib/engine/simulator'
 import { replayGame } from '@/lib/engine/builderReplay'
-import { MOVE_MPS, MIN_TURN_S, TURN_TAIL_S, scheduleTurn, turnStep, type BuilderAction } from '@/lib/engine/turnBuilder'
+import { MOVE_MPS, scheduleTurn, turnStep, type BuilderAction } from '@/lib/engine/turnBuilder'
 import {
   DEF_MAX_DEPTH,
   MAX_SHAPE_M,
@@ -153,7 +153,10 @@ describe('shape rules', () => {
   })
 
   it('U14 — pass and move: the passer offers himself again once the ball has left him', () => {
-    const q: BuilderAction[] = [{ kind: 'pass', playerId: 'o-RCM', to: 'o-RST' }]
+    // a pass that ends the turn leaves no time to move: everybody stops when the ball lands
+    expect(byId(plan([{ kind: 'pass', playerId: 'o-RCM', to: 'o-RST' }]), 'o-RCM')).toBeUndefined()
+    // LM's run keeps the turn going after the pass, so the passer follows it
+    const q: BuilderAction[] = [{ kind: 'pass', playerId: 'o-RCM', to: 'o-RST' }, { kind: 'run', playerId: 'o-LM', toX: 6, toY: 50 }]
     const inp = input(q)
     const moves = planTeamShape(inp)
     const rcm = byId(moves, 'o-RCM')!
@@ -200,7 +203,8 @@ describe('shape rules', () => {
     const inp = input(up)
     const moves = planTeamShape(inp)
     const dur = turnDuration(inp.schedule)
-    expect(dur).toBeCloseTo(Math.max(MIN_TURN_S, inp.schedule.length + TURN_TAIL_S), 6)
+    // the turn ends when the last commanded action ends: no settle tail
+    expect(dur).toBeCloseTo(inp.schedule.length, 6)
     for (const m of moves) {
       expect(m.start).toBe(0)
       expect(m.end).toBeLessThanOrEqual(dur + 1e-9)
@@ -245,7 +249,8 @@ describe('single-command scenarios (4-4-2, ball with RCM at (43, 34))', () => {
     for (let i = 0; i < ours.length; i++)
       for (let j = i + 1; j < ours.length; j++)
         expect(Math.hypot(f[ours[i]][0] - f[ours[j]][0], f[ours[i]][1] - f[ours[j]][1])).toBeGreaterThanOrEqual(5)
-    for (const m of moves) expect(len(m)).toBeLessThanOrEqual((m.reason === 'shape' ? MAX_SHAPE_M : MAX_RUN_M) + 1e-6)
+    // (a side step off a defender may overrun the cap by the clearance distance)
+    for (const m of moves) expect(len(m)).toBeLessThanOrEqual((m.reason === 'shape' ? MAX_SHAPE_M : MAX_RUN_M) + CLEAR_M)
   })
 
   it('S2 — dribble back: no runs beyond or support angles; nobody drops more than half the retreat; the defence holds', () => {
@@ -278,18 +283,20 @@ describe('single-command scenarios (4-4-2, ball with RCM at (43, 34))', () => {
     const q: BuilderAction[] = [{ kind: 'pass', playerId: 'o-RCM', to: 'o-RST' }]
     const moves = plan(q)
     expect(byId(moves, 'o-RST')).toBeUndefined()
-    expect(byId(moves, 'o-RCM')?.reason).toBe('pass-move')
-    // the other forward makes the third-man run beyond RST (42, 47); a 13 m pass is a short turn
-    // (MIN_TURN_S), so the run covers what fits in it — the AI never makes a turn longer
+    // the pass ends the turn, so the passer has no time to follow it
+    expect(byId(moves, 'o-RCM')).toBeUndefined()
+    // the other forward makes the third-man run beyond RST (42, 47); a 13 m pass is a short turn, so
+    // the run covers what fits in the pass's flight — the AI never makes a turn longer
     const lst = byId(moves, 'o-LST')!
     expect(lst.reason).toBe('depth')
-    expect(lst.to[1]).toBeGreaterThanOrEqual(47 + 8)
-    expect(len(lst)).toBeCloseTo(MOVE_MPS * MIN_TURN_S, 5)
+    expect(lst.to[1]).toBeGreaterThan(47 + 3)
+    expect(len(lst)).toBeCloseTo(MOVE_MPS * scheduleTurn(q, homes).length, 5)
     // support angles sit around the receiver, not the passer
     const sup = moves.filter((m) => m.reason === 'support')
     expect(sup.length).toBeGreaterThanOrEqual(1)
+    // (they only get the pass's flight time, so they head that way rather than arrive)
     for (const m of sup) {
-      expect(Math.hypot(m.to[0] - 42, m.to[1] - 47)).toBeLessThan(12)
+      expect(Math.hypot(m.to[0] - 42, m.to[1] - 47)).toBeLessThan(Math.hypot(m.from[0] - 42, m.from[1] - 47))
       expect(m.to[1]).toBeGreaterThan(34)
     }
   })
@@ -305,8 +312,9 @@ describe('single-command scenarios (4-4-2, ball with RCM at (43, 34))', () => {
     const moves = plan(q, 'o-LST', up)
     const rst = byId(moves, 'o-RST')!
     expect(rst.reason).toBe('box')
-    expect(rst.to[1]).toBeGreaterThanOrEqual(90)
-    expect(moves.some((m) => m.reason === 'second-ball' && Math.abs(m.to[1] - 85) < 4)).toBe(true)
+    // heads for the box; a quick shot leaves him only the flight time to get there
+    expect(rst.to[1]).toBeGreaterThan(86)
+    expect(moves.some((m) => m.reason === 'second-ball' && m.to[1] > m.from[1])).toBe(true)
     for (const pid of ['o-LB', 'o-LCB', 'o-RCB', 'o-RB']) {
       const m = byId(moves, pid)
       if (m) expect(m.to[1]).toBeLessThanOrEqual(DEF_MAX_DEPTH + 1e-9)
@@ -318,10 +326,10 @@ describe('single-command scenarios (4-4-2, ball with RCM at (43, 34))', () => {
     const moves = plan(q, 'o-RM')
     const rb = byId(moves, 'o-RB')!
     expect(rb.reason).toBe('overlap')
-    // from (58, 20) the run heads outside and up the line; one turn's cap cannot finish it
+    // from (58, 20) the run heads outside and up the line; the turn (RM's 14.6 m dribble) is too short to finish it
     expect(rb.to[0]).toBeGreaterThanOrEqual(rb.from[0])
     expect(rb.to[1]).toBeGreaterThanOrEqual(rb.from[1] + 8)
-    expect(len(rb)).toBeCloseTo(MAX_RUN_M, 5)
+    expect(len(rb)).toBeCloseTo(Math.min(MAX_RUN_M, MOVE_MPS * scheduleTurn(q, homes).length), 5)
   })
 
   it('S7 — turnStep carries the AI moves and keeps its duration', () => {
