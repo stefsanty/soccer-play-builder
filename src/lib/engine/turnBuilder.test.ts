@@ -5,6 +5,7 @@ import {
   buildSnapshots,
   holderAfter,
   queueAction,
+  removeAction,
   sanitizeQueue,
   shortLabel,
   scheduleTurn,
@@ -57,6 +58,28 @@ describe('sanitizeQueue', () => {
     expect(withoutFirst).toEqual([{ kind: 'run', playerId: 'c', toX: 1, toY: 1 }])
     // the intact chain is untouched
     expect(sanitizeQueue(q, 'a')).toEqual(q)
+  })
+})
+
+describe('removeAction', () => {
+  const q: BuilderAction[] = [
+    { kind: 'pass', playerId: 'a', to: 'b' },
+    { kind: 'run', playerId: 'c', toX: 1, toY: 1 },
+    { kind: 'pass', playerId: 'b', to: 'c' },
+    { kind: 'dribble', playerId: 'c', toX: 2, toY: 2 },
+  ]
+  it('reports the dependents that fall away with the removed action, so the UI can say so and offer Undo', () => {
+    const r = removeAction(q, 0, 'a')
+    expect(r.queue).toEqual([{ kind: 'run', playerId: 'c', toX: 1, toY: 1 }])
+    expect(r.dropped).toEqual([
+      { kind: 'pass', playerId: 'b', to: 'c' },
+      { kind: 'dribble', playerId: 'c', toX: 2, toY: 2 },
+    ])
+  })
+  it('removing a run drops nothing else', () => {
+    const r = removeAction(q, 1, 'a')
+    expect(r.queue).toEqual([q[0], q[2], q[3]])
+    expect(r.dropped).toEqual([])
   })
 })
 

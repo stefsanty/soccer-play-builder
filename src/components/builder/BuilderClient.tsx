@@ -17,7 +17,8 @@
  * a rewind snapshot: ⏪ / ▶️ tween through them, and "Replan from here" branches the game from any
  * snapshot, discarding what came after.
  * Mobile-first: turn counter top-right, rewind bottom-left, a two-row action queue of short chips
- * ("RCM→RST 0%") at the bottom that scrolls when a turn has more.
+ * ("RCM→RST 0%") at the bottom that scrolls when a turn has more. Removing a chip that others depended
+ * on says so in a toast at the foot of the pitch with Undo; the trash asks ("Clear 4?") before clearing.
  * The bottom panel's rows have fixed heights so the pitch never resizes mid-plan; defenders draw
  * under our team and the holder on top; at most two AI suggestions show, with 44 px ✓/× chips.
  * The game is a Play (setup + one step per turn): the header's Save stores it through the editor's
@@ -50,8 +51,8 @@ import {
   buildSnapshots,
   holderAfter,
   queueAction,
+  removeAction,
   retimeAction,
-  sanitizeQueue,
   scheduleTurn,
   shortLabel,
   turnStep,
@@ -159,7 +160,11 @@ export function BuilderClient() {
   const [chain, setChain] = useState<{ state: SimState; ball: Pt; holder: string } | null>(null)
   const [history, setHistory] = useState<TurnSnapshot[]>([])
   const [historyIdx, setHistoryIdx] = useState<number | null>(null)
-  const [flash, setFlash] = useState<string | null>(null)
+  // A toast at the foot of the pitch, near the thumb; one with `undo` stays longer and offers it.
+  const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null)
+  const setFlash = useCallback((text: string | null) => setToast(text ? { text } : null), [])
+  // Trash: the first tap asks ("Clear 5?"), the second clears; the question times out after 3 s.
+  const [confirmClear, setConfirmClear] = useState(false)
   // Goals scored so far (header chip) and the GOAL! / SAVED banner, shown the moment it happens in playback.
   const [score, setScore] = useState(0)
   const [goalBanner, setGoalBanner] = useState<{ kind: BannerKind; title: string; sub: string; preview: boolean } | null>(null)
@@ -210,10 +215,32 @@ export function BuilderClient() {
   }
 
   useEffect(() => {
-    if (!flash) return
-    const t = setTimeout(() => setFlash(null), 2200)
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), toast.undo ? 6000 : 2200)
     return () => clearTimeout(t)
-  }, [flash])
+  }, [toast])
+  useEffect(() => {
+    if (!confirmClear) return
+    const t = setTimeout(() => setConfirmClear(false), 3000)
+    return () => clearTimeout(t)
+  }, [confirmClear])
+  useEffect(() => setConfirmClear(false), [queue, phase])
+
+  /** Remove one chip; if other actions depended on it they go too, and the toast says so with Undo. */
+  const removeChip = (i: number) => {
+    const before = queue
+    const { queue: next, dropped } = removeAction(queue, i, holder)
+    setQueue(next)
+    if (dropped.length === 0) return
+    const n = dropped.length
+    setToast({
+      text: `Removed ${shortLabel(before[i], labelOf)} and ${n} action${n === 1 ? '' : 's'} that needed it`,
+      undo: () => {
+        setQueue(before)
+        setToast(null)
+      },
+    })
+  }
 
   // The banner lingers until tapped, or a few seconds after the turn finishes playing.
   useEffect(() => {
@@ -993,10 +1020,21 @@ export function BuilderClient() {
             </div>
           </div>
         )}
-        {flash && (
-          <div className="pointer-events-none absolute inset-x-0 top-3 flex justify-center">
-            <div className="rounded-full bg-[rgba(11,16,21,0.9)] px-4 py-1.5 text-xs font-semibold text-[#ffd43b] shadow-lg backdrop-blur">
-              {flash}
+        {toast && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center" data-testid="toast">
+            <div className="flex items-center gap-3 rounded-full bg-[rgba(11,16,21,0.92)] py-1.5 pl-4 pr-1.5 text-xs font-semibold text-[#ffd43b] shadow-lg backdrop-blur">
+              {toast.text}
+              {toast.undo ? (
+                <button
+                  onClick={toast.undo}
+                  data-testid="toast-undo"
+                  className="pointer-events-auto flex h-8 touch-manipulation items-center rounded-full bg-[var(--app-accent)] px-3 text-xs font-bold text-[var(--app-accent-ink)] active:scale-95"
+                >
+                  Undo
+                </button>
+              ) : (
+                <span className="w-2" />
+              )}
             </div>
           </div>
         )}
@@ -1072,7 +1110,7 @@ export function BuilderClient() {
                       </span>
                     )}
                     <button
-                      onClick={() => setQueue((q) => sanitizeQueue(q.filter((_, j) => j !== i), holder))}
+                      onClick={() => removeChip(i)}
                       aria-label={`Remove ${actionLabel(a, labelOf)}`}
                       className="flex size-6 items-center justify-center rounded text-[var(--app-muted)] hover:text-red-400"
                     >
@@ -1187,14 +1225,24 @@ export function BuilderClient() {
               </button>
               <button
                 onClick={() => {
+                  if (!confirmClear) {
+                    setConfirmClear(true)
+                    return
+                  }
                   setQueue([])
                   setSelected(null)
+                  setConfirmClear(false)
                 }}
                 disabled={inHistory || phase !== 'plan' || queue.length === 0}
-                aria-label="Clear queued actions"
-                className="flex size-12 touch-manipulation items-center justify-center rounded-[14px] border border-[var(--app-line)] bg-[var(--app-bg)] text-[var(--app-muted)] transition-all duration-100 active:scale-95 disabled:opacity-35"
+                aria-label={confirmClear ? `Tap again to clear ${queue.length} queued action${queue.length === 1 ? '' : 's'}` : 'Clear queued actions'}
+                data-testid="clear-queue"
+                data-confirm={confirmClear || undefined}
+                className={`flex h-12 touch-manipulation items-center justify-center gap-1 rounded-[14px] border transition-all duration-100 active:scale-95 disabled:opacity-35 ${
+                  confirmClear ? 'w-auto border-red-400/60 bg-red-500/20 px-3 text-sm font-bold text-red-300' : 'size-12 border-[var(--app-line)] bg-[var(--app-bg)] text-[var(--app-muted)]'
+                }`}
               >
                 <Trash2 className="size-5" />
+                {confirmClear && <span>Clear {queue.length}?</span>}
               </button>
             </div>
           </>
