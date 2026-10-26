@@ -70,11 +70,10 @@ import {
   scheduleTurn,
   shortLabel,
   turnStep,
-  MIN_TURN_S,
   PASS_RANGE_M,
   RUN_RANGE_M,
   TACKLE_S,
-  TURN_TAIL_S,
+  turnSeconds,
   type ActionKind,
   type ActionPlan,
   type BuilderAction,
@@ -96,6 +95,8 @@ const BLOCK_COLORS: Record<string, string> = {
   shot: 'rgba(255,120,120,0.95)',
 }
 const SHOT_ARROW = 'rgba(255,140,140,0.95)'
+/** A pitch tap this close to a queued run / dribble end selects that player again. */
+const CHAIN_TAP_M = 3
 /**
  * Bottom panel rows have FIXED heights, so the pitch above never resizes while you plan — a queue
  * chip or the timeline appearing used to shrink the pitch and move every player under your thumb.
@@ -320,7 +321,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const planned = schedule?.planned ?? basePositions
   // Who will hold the ball once the queue so far has run — gating follows this through the chain.
   const projectedHolder = holderAfter(holder, queue)
-  const tlDuration = schedule ? Math.max(MIN_TURN_S, schedule.length + TURN_TAIL_S) : 0
+  const tlDuration = schedule ? turnSeconds(schedule) : 0
 
   // Attacking AI (engine/teamShape.ts): where the teammates the user did not command go while the
   // queued turn plays. Pure and deterministic, so the arrows, Preview, Play and a reopened game agree.
@@ -561,9 +562,16 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       setScrubT(null)
       return
     }
-    if (!selected) return
     const m = toMeters(e)
     if (!m) return
+    if (!selected) {
+      // Tapping the end ring of a queued run / dribble picks that player up again, to chain from there.
+      const end = schedule?.plans
+        .filter((p) => (p.action.kind === 'run' || p.action.kind === 'dribble') && Math.hypot(p.to[0] - m[0], p.to[1] - m[1]) <= CHAIN_TAP_M)
+        .at(-1)
+      if (end) setSelected(end.action.playerId)
+      return
+    }
     // A projected holder with the ball already at their chain time dribbles; otherwise they run,
     // concurrent with the incoming pass flight (the simulator's pass homes onto the live receiver).
     const canDribble = allowedKinds(selected, projectedHolder).includes('dribble')
@@ -596,7 +604,9 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       setFlash(`Max range — ${labelOf(selected)} ${kind === 'dribble' ? 'dribbles' : 'runs'} ${Math.round(RUN_RANGE_M)}m toward it`)
     }
     setQueue((q) => queueAction(q, { kind, playerId: selected, toX: to[0], toY: to[1] }))
-    setSelected(null)
+    // A dribbler stays selected: the next tap on a teammate passes from the dribble's end, the goal
+    // mouth shoots from there (dribble → pass / dribble → shot in one turn).
+    setSelected(kind === 'dribble' ? selected : null)
   }
 
   const startGame = () => {
@@ -816,7 +826,9 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
               ? `${scrubSeconds.toFixed(1)}s — ${activeNow.length ? activeNow.join(' · ') : 'ball settles'}`
               : selected
                 ? allowedKinds(selected, projectedHolder).includes('pass')
-                  ? selected !== holder
+                  ? selected === holder && queue.some((a) => a.playerId === selected && a.kind === 'dribble')
+                    ? `${labelOf(selected)} dribbles first — tap a teammate to pass from there, the goal to shoot, or ${labelOf(selected)} to finish`
+                    : selected !== holder
                     ? `${labelOf(selected)} will have the ball — tap a teammate to pass, or the pitch to run and meet it`
                     : `${labelOf(selected)} has the ball — tap a teammate to pass, the pitch to dribble, or the goal to shoot`
                   : `${labelOf(selected)} — tap the pitch to queue a run (beyond the area = max-distance run)`
@@ -1004,6 +1016,13 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                 </g>
               )
             })}
+
+          {/* the selected player's chain end: where his next action starts from (after a dribble, the pass goes from here) */}
+          {!frame && !inHistory && phase === 'plan' && selected && planned[selected] && basePositions[selected] &&
+            Math.hypot(planned[selected][0] - basePositions[selected][0], planned[selected][1] - basePositions[selected][1]) > 0.5 && (() => {
+              const c = pt(planned[selected][0], planned[selected][1])
+              return <circle data-testid="chain-end" cx={c.x} cy={c.y} r={21} fill="none" stroke={BALL} strokeWidth={3.5} strokeDasharray="6 4" pointerEvents="none" />
+            })()}
 
           {/* players — defenders underneath, our team above, the ball holder on top (never covered) */}
           {drawOrder(play.players, shownHolder).map((p) => {

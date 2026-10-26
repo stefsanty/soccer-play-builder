@@ -68,9 +68,11 @@ export const MIN_ACTION_S = 0.5
 export const ACTION_MAX_S = 3.5
 export const RUN_RANGE_M = MOVE_MPS * ACTION_MAX_S
 export const PASS_RANGE_M = PASS_MPS * ACTION_MAX_S
-/** Extra seconds after the last action lands, so the defensive block visibly settles. */
-export const TURN_TAIL_S = 0.8
-export const MIN_TURN_S = 1.6
+/** How long a turn lasts: exactly until the last commanded action ends. Then the whole game stops —
+ *  there is no settle tail, and the AI (teammates and defenders) never moves past it. */
+export function turnSeconds(schedule: Pick<TurnSchedule, 'length'>): number {
+  return Math.max(MIN_ACTION_S, schedule.length)
+}
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1])
 
@@ -252,7 +254,8 @@ export function scheduleTurn(actions: BuilderAction[], startPositions: Record<st
 /**
  * The queued turn as a simulator step, with the opponent's defensive AI on. `support` are the attacking
  * AI's off-ball moves (engine/teamShape.ts) for the teammates the user did not command; they ride along
- * as ordinary moves. The duration comes from the user's actions alone — the AI fits inside it.
+ * as ordinary moves. The duration comes from the user's actions alone — the AI fits inside it, and
+ * everybody stops when the last commanded action ends.
  */
 export function turnStep(actions: BuilderAction[], positions: Record<string, Pt>, index: number, outcomes: TurnOutcomes = {}, support: PlayerMove[] = []): PlayStep {
   const sched = scheduleTurn(actions, positions, outcomes)
@@ -260,7 +263,7 @@ export function turnStep(actions: BuilderAction[], positions: Record<string, Pt>
     id: `turn-${index}`,
     index,
     title: `Turn ${index}`,
-    duration: Math.max(MIN_TURN_S, sched.length + TURN_TAIL_S),
+    duration: turnSeconds(sched),
     moves: [...sched.moves, ...support],
     passes: sched.passes,
     defenderRules: {},

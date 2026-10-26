@@ -11,12 +11,10 @@ import {
   scheduleTurn,
   turnStep,
   ACTION_MAX_S,
-  MIN_TURN_S,
   MOVE_MPS,
   PASS_MPS,
   PASS_RANGE_M,
   RUN_RANGE_M,
-  TURN_TAIL_S,
   type BuilderAction,
 } from '@/lib/engine/turnBuilder'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
@@ -213,9 +211,9 @@ describe('scheduleTurn', () => {
 
 describe('turnStep', () => {
   const positions: Record<string, Pt> = { a: [30, 30], b: [30, 45] }
-  it('wraps the schedule with the settle tail and switches the opponent AI on', () => {
+  it('ends when the last commanded action ends (no settle tail) and switches the opponent AI on', () => {
     const step = turnStep([{ kind: 'run', playerId: 'b', toX: 30, toY: 60 }], positions, 2)
-    expect(step.duration).toBeCloseTo(Math.max(MIN_TURN_S, 15 / MOVE_MPS + TURN_TAIL_S))
+    expect(step.duration).toBeCloseTo(15 / MOVE_MPS)
     expect(step.ai?.opp?.on).toBe(true)
     expect(step.ai?.ours).toBeUndefined()
   })
@@ -354,5 +352,38 @@ describe('shortLabel', () => {
     expect(shortLabel({ kind: 'run', playerId: 'LST', toX: 0, toY: 0 }, id)).toBe('LST run')
     expect(shortLabel({ kind: 'dribble', playerId: 'LST', toX: 0, toY: 0 }, id)).toBe('LST dribble')
     expect(shortLabel({ kind: 'shot', playerId: 'LST', toX: 0, toY: 0 }, id)).toBe('LST shot')
+  })
+})
+
+describe('dribble → pass / dribble → shot chains (one player, one turn)', () => {
+  const play = createDefaultPlay()
+  const positions = Object.fromEntries(play.players.map((p) => [p.id, [p.x, p.y] as Pt]))
+  const dribble: BuilderAction = { kind: 'dribble', playerId: 'o-LCB', toX: 25, toY: 33 }
+
+  it('the pass leaves from the dribble end, once the dribble is over', () => {
+    const s = scheduleTurn([dribble, { kind: 'pass', playerId: 'o-LCB', to: 'o-LST' }], positions)
+    expect(s.plans).toHaveLength(2)
+    expect(s.plans[1].from).toEqual([25, 33])
+    expect(s.plans[1].start).toBeCloseTo(s.plans[0].end)
+    expect(holderAfter('o-LCB', s.plans.map((p) => p.action))).toBe('o-LST')
+    // the queue survives a removal elsewhere and the dribble → pass stays valid
+    expect(sanitizeQueue([dribble, { kind: 'pass', playerId: 'o-LCB', to: 'o-LST' }], 'o-LCB')).toHaveLength(2)
+  })
+
+  it('the shot leaves from the dribble end', () => {
+    const s = scheduleTurn([{ kind: 'dribble', playerId: 'o-LST', toX: 30, toY: 85 }, { kind: 'shot', playerId: 'o-LST', toX: 34, toY: 105.5 }], positions)
+    expect(s.plans[1].from).toEqual([30, 85])
+    expect(s.plans[1].start).toBeCloseTo(s.plans[0].end)
+  })
+
+  it('the simulated turn stops when the pass lands: nobody moves after the last commanded action', () => {
+    const q: BuilderAction[] = [dribble, { kind: 'pass', playerId: 'o-LCB', to: 'o-LST' }]
+    const step = turnStep(q, positions, 1)
+    const s = scheduleTurn(q, positions)
+    expect(step.duration).toBeCloseTo(s.plans[1].end)
+    const game = { ...play, steps: [play.steps[0], step] }
+    const tl = simulateStep(game, 1, initialState(game), 'o-LCB', positions['o-LCB'])
+    expect(tl.duration).toBeCloseTo(s.plans[1].end)
+    expect(tl.frames.at(-1)?.ball.holder).toBe('o-LST')
   })
 })

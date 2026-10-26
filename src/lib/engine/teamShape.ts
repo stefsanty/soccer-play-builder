@@ -13,7 +13,7 @@
 
 import type { PlayerMove } from '@/lib/types/play'
 import { PITCH_H, PITCH_W } from '@/lib/engine/pitch'
-import { MIN_ACTION_S, MIN_TURN_S, MOVE_MPS, TURN_TAIL_S, holderAfter, type BuilderAction, type TurnSchedule } from '@/lib/engine/turnBuilder'
+import { MIN_ACTION_S, MOVE_MPS, holderAfter, turnSeconds, type BuilderAction, type TurnSchedule } from '@/lib/engine/turnBuilder'
 
 type Pt = [number, number]
 type Team = 'ours' | 'opp'
@@ -128,9 +128,9 @@ function stopShort(from: Pt, to: Pt, p: Pt, r: number): Pt {
 }
 const isKeeperLabel = (label: string) => /gk/i.test(label)
 
-/** How long the turn lasts, the same way turnStep derives it (the AI moves must fit inside). */
+/** How long the turn lasts, the same way turnStep derives it: the AI moves end no later than the last commanded action. */
 export function turnDuration(schedule: Pick<TurnSchedule, 'length'>): number {
-  return Math.max(MIN_TURN_S, schedule.length + TURN_TAIL_S)
+  return turnSeconds(schedule)
 }
 
 export interface FormationLines {
@@ -458,6 +458,15 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
       const t = target.get(id)!
       if (dist(t, f) >= SPACING_M || dist(c, f) < SPACING_M) continue
       target.set(id, stopShort(c, t, f, SPACING_M))
+    }
+    // the same for an opponent's space: the cap can undo the clearance step, so step aside again (a
+    // side step may overrun the shape cap, never the distance he can run in the turn), else stop short
+    for (const o of oppStarts) {
+      const t = target.get(id)!
+      if (dist(t, o) >= CLEAR_M || dist(c, o) < CLEAR_M) continue
+      const dy = t[1] - o[1]
+      const aside: Pt = [o[0] + (t[0] - o[0] >= 0 ? 1 : -1) * Math.sqrt(Math.max(0, CLEAR_M * CLEAR_M - dy * dy)), t[1]]
+      target.set(id, dist(c, aside) <= MOVE_MPS * duration + 1e-9 ? aside : stopShort(c, t, o, CLEAR_M))
     }
   }
 
