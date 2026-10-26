@@ -6,6 +6,7 @@ import {
   holderAfter,
   queueAction,
   sanitizeQueue,
+  shortLabel,
   scheduleTurn,
   turnStep,
   ACTION_MAX_S,
@@ -321,5 +322,14 @@ describe('turn resolution through the simulator', () => {
     const last = tl.frames.at(-1)!
     expect(last.players['o-RM'].x).toBeCloseTo(48, 0)
     expect(last.players['o-RM'].y).toBeCloseTo(56, 0)
+  })
+})
+
+describe('shortLabel', () => {
+  it('fits a queue chip at phone width: "RCM→RST", "LST run", "LST dribble", "LST shot"', () => {
+    expect(shortLabel({ kind: 'pass', playerId: 'RCM', to: 'RST' }, id)).toBe('RCM→RST')
+    expect(shortLabel({ kind: 'run', playerId: 'LST', toX: 0, toY: 0 }, id)).toBe('LST run')
+    expect(shortLabel({ kind: 'dribble', playerId: 'LST', toX: 0, toY: 0 }, id)).toBe('LST dribble')
+    expect(shortLabel({ kind: 'shot', playerId: 'LST', toX: 0, toY: 0 }, id)).toBe('LST shot')
   })
 })

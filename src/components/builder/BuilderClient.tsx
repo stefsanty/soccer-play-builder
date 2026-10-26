@@ -16,7 +16,8 @@
  * suggests support runs as dashed green arrows (✓ queues, × dismisses). Every resolved action becomes
  * a rewind snapshot: ⏪ / ▶️ tween through them, and "Replan from here" branches the game from any
  * snapshot, discarding what came after.
- * Mobile-first: turn counter top-right, rewind bottom-left, scrollable action queue at the bottom.
+ * Mobile-first: turn counter top-right, rewind bottom-left, a two-row action queue of short chips
+ * ("RCM→RST 0%") at the bottom that scrolls when a turn has more.
  * The bottom panel's rows have fixed heights so the pitch never resizes mid-plan; defenders draw
  * under our team and the holder on top; at most two AI suggestions show, with 44 px ✓/× chips.
  * The game is a Play (setup + one step per turn): the header's Save stores it through the editor's
@@ -52,6 +53,7 @@ import {
   retimeAction,
   sanitizeQueue,
   scheduleTurn,
+  shortLabel,
   turnStep,
   MIN_TURN_S,
   PASS_RANGE_M,
@@ -85,7 +87,8 @@ const SHOT_ARROW = 'rgba(255,140,140,0.95)'
  * The timeline box fits two lanes and scrolls for more.
  */
 const STATUS_H = 32
-const QUEUE_H = 38
+/** Two rows of chips: every queued action stays visible at phone width (more scroll inside the box). */
+const QUEUE_H = 54
 const TIMELINE_H = 62
 const LANE_H = 20
 const CONTROLS_H = 48
@@ -173,6 +176,12 @@ export function BuilderClient() {
 
   const svgRef = useRef<SVGSVGElement>(null)
   const tlRef = useRef<HTMLDivElement>(null)
+  // The chip box shows two rows; a third row scrolls, so the newest chip is brought into view.
+  const queueRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const box = queueRef.current
+    if (box && box.scrollHeight > box.clientHeight) box.scrollTop = box.scrollHeight
+  }, [queue.length])
   const plansRef = useRef<ActionPlan[]>([])
   // The play including the running turn's step; only committed when a real Play finishes (not Preview).
   const pendingPlayRef = useRef<Play | null>(null)
@@ -1032,7 +1041,12 @@ export function BuilderClient() {
           </div>
         ) : (
           <>
-            <div className="no-scrollbar mb-2 flex items-center gap-1.5 overflow-x-auto" style={{ height: QUEUE_H }} data-testid="action-queue">
+            <div
+              ref={queueRef}
+              className="no-scrollbar mb-2 flex flex-wrap content-start items-start gap-1 overflow-y-auto"
+              style={{ height: QUEUE_H }}
+              data-testid="action-queue"
+            >
               {inHistory ? (
                 <span className="text-xs text-[var(--app-muted)]">{viewSnapshot?.label}</span>
               ) : queue.length === 0 ? (
@@ -1041,25 +1055,26 @@ export function BuilderClient() {
                 queue.map((a, i) => (
                   <span
                     key={`${a.playerId}-${i}`}
-                    className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--app-line)] bg-[var(--app-chip)] px-2.5 py-1.5 text-xs font-semibold"
+                    data-testid={`queue-chip-${i}`}
+                    className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-[var(--app-line)] bg-[var(--app-chip)] pl-1.5 pr-0.5 text-[11px] font-semibold leading-none"
                   >
-                    <span className="text-[10px] text-[var(--app-muted)]">{i + 1}</span>
-                    {a.kind !== 'run' && <CircleDot className="size-3.5 text-[#ffd43b]" aria-hidden />}
-                    {actionLabel(a, labelOf)}
+                    <span className="text-[9px] text-[var(--app-muted)]">{i + 1}</span>
+                    {a.kind !== 'run' && <CircleDot className="size-3 text-[#ffd43b]" aria-hidden />}
+                    {shortLabel(a, labelOf)}
                     {a.kind === 'shot' && shotChances[i] !== undefined && (
-                      <span className="rounded px-1 text-[10px] text-white" style={{ background: chanceColor(shotChances[i]) }}>
+                      <span className="rounded px-1 text-[9px] text-white" style={{ background: chanceColor(shotChances[i]) }}>
                         {pct(shotChances[i])}
                       </span>
                     )}
                     {risks[i] && (
-                      <span className="rounded px-1 text-[10px] text-white" style={{ background: riskColor(risks[i].risk) }}>
+                      <span className="rounded px-1 text-[9px] text-white" style={{ background: riskColor(risks[i].risk) }}>
                         {pct(risks[i].risk)}
                       </span>
                     )}
                     <button
                       onClick={() => setQueue((q) => sanitizeQueue(q.filter((_, j) => j !== i), holder))}
                       aria-label={`Remove ${actionLabel(a, labelOf)}`}
-                      className="-mr-1 flex size-5 items-center justify-center rounded text-[var(--app-muted)] hover:text-red-400"
+                      className="flex size-6 items-center justify-center rounded text-[var(--app-muted)] hover:text-red-400"
                     >
                       <X className="size-3.5" />
                     </button>
@@ -1108,7 +1123,7 @@ export function BuilderClient() {
                       onPointerMove={onBlockPointerMove}
                       onPointerUp={onBlockPointerUp}
                     >
-                      {actionLabel(plan.action, labelOf)}
+                      {shortLabel(plan.action, labelOf)}
                     </div>
                   )
                 })}
