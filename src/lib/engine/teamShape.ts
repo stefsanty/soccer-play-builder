@@ -22,6 +22,7 @@ export type LineRole = 'gk' | 'def' | 'mid' | 'fwd'
 export type SupportReason =
   | 'shape'       // block lift / shift toward the formation slot
   | 'support'     // support angle beside-and-behind the carrier
+  | 'pass-move'   // the passer offers himself again once his pass is away
   | 'wide'        // wide outlet ahead of the ball on the touchline
   | 'depth'       // run beyond the ball (third man)
   | 'overlap'     // outside the wide carrier
@@ -201,7 +202,6 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
     if (a.kind === 'pass') frozen.add(a.to)
   }
   const free = lines.outfield.filter((id) => !frozen.has(id) && positions[id])
-  if (free.length === 0) return []
 
   // 2. ball story
   const lastShot = [...queue].reverse().find((a) => a.kind === 'shot')
@@ -241,8 +241,29 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
 
   const jobs = new Map<string, Job>()
   const frozenFinal = [...frozen].filter((id) => planned[id] || positions[id]).map((id) => xd(planned[id] ?? positions[id]))
+  const duration = turnDuration(schedule)
+  // Pass and move: a passer whose chain ends with his pass offers himself again beside-and-behind the
+  // receiver, on the side he passed from, starting the moment the ball leaves him. The run is bounded
+  // by what is left of the turn, so a quick pass gives a short step and a long one a proper run.
+  const passMoves: SupportMove[] = []
+  queue.forEach((a, i) => {
+    if (a.kind !== 'pass' || lines.role(a.playerId) === 'gk') return
+    if (queue.slice(i + 1).some((b) => b.playerId === a.playerId)) return
+    const plan = schedule.plans.find((p) => p.action === a)
+    if (!plan) return
+    const passer = xd(plan.from)
+    const receiver = xd(plan.to)
+    const s: 1 | -1 = passer[0] >= receiver[0] ? 1 : -1
+    const slot: Pt = [clamp(receiver[0] + s * SUP_SIDE, EDGE_X, PITCH_W - EDGE_X), clamp(receiver[1] - SUP_BACK, DEPTH_MIN, DEPTH_MAX)]
+    const cap = Math.min(MAX_RUN_M, MOVE_MPS * (duration - plan.end))
+    const d = dist(passer, slot)
+    if (cap < DEADBAND_M || d < DEADBAND_M) return
+    const to: Pt = d > cap ? [passer[0] + ((slot[0] - passer[0]) * cap) / d, passer[1] + ((slot[1] - passer[1]) * cap) / d] : slot
+    passMoves.push({ playerId: a.playerId, from: [plan.from[0], plan.from[1]], to: [to[0], Y(to[1])], reason: 'pass-move', start: plan.end, end: Math.min(duration, plan.end + Math.max(MIN_ACTION_S, dist(passer, to) / MOVE_MPS)) })
+  })
+  const reserved = passMoves.map((m) => xd(m.to))
   const taken = (slot: Pt) =>
-    frozenFinal.some((p) => dist(p, slot) < SLOT_TAKEN_M) || [...jobs.values()].some((j) => dist(j.to, slot) < SLOT_TAKEN_M)
+    frozenFinal.some((p) => dist(p, slot) < SLOT_TAKEN_M) || reserved.some((p) => dist(p, slot) < SLOT_TAKEN_M) || [...jobs.values()].some((j) => dist(j.to, slot) < SLOT_TAKEN_M)
   const nearest = (ids: string[]) => [...ids].sort((a, b) => dist(cur(a), ball) - dist(cur(b), ball) || lines.outfield.indexOf(a) - lines.outfield.indexOf(b))
   const fwds = free.filter((id) => lines.role(id) === 'fwd')
   const nonFwd = free.filter((id) => lines.role(id) !== 'fwd')
@@ -329,7 +350,6 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
   }
 
   // 6. constraints
-  const duration = turnDuration(schedule)
   const capOf = (id: string) => Math.min(reason.get(id) === 'shape' || reason.get(id) === 'rest' ? MAX_SHAPE_M : MAX_RUN_M, MOVE_MPS * duration)
   const capMove = (id: string) => {
     const c = cur(id)
@@ -407,7 +427,7 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
     if (d < DEADBAND_M) continue
     out.push({ playerId: id, from: [from[0], from[1]], to, reason: reason.get(id)!, start: 0, end: Math.min(duration, Math.max(MIN_ACTION_S, d / MOVE_MPS)) })
   }
-  return out
+  return [...out, ...passMoves]
 }
 
 /** The AI moves as step moves: a jog, drawn by the builder itself (hidden from the editor / viewer arrows). */

@@ -14,15 +14,20 @@
  * from the defenders' positions, shown on the ghost arrow; Play rolls those too — an intercepted
  * pass flies to the defender, a tackled dribble stops short, and the ball comes back to the player
  * who lost it (no turnover). Preview plays the queued turn without committing;
- * Play resolves it through the step simulator with the full defensive AI, and the attacking AI
- * suggests support runs as dashed green arrows (✓ queues, × dismisses). Every resolved action becomes
+ * Play resolves it through the step simulator with the full defensive AI. The attacking AI
+ * (engine/teamShape.ts) moves every teammate the user did not command — the block lifts and slides
+ * with the ball, two support angles and a wide outlet form around the carrier, a forward runs beyond,
+ * a full-back overlaps, forwards crash the box on a shot, a passer moves again once his pass is away —
+ * drawn as thin dotted green arrows while planning and resolved as ordinary moves in the turn (user
+ * commands always win: the keeper, commanded players and pass receivers are never moved by it). The
+ * old ✓/× suggestion chips are gone. Every resolved action becomes
  * a rewind snapshot: ⏪ / ▶️ tween through them, and "Replan from here" branches the game from any
  * snapshot, discarding what came after.
  * Mobile-first: turn counter top-right, rewind bottom-left, a two-row action queue of short chips
  * ("RCM→RST 0%") at the bottom that scrolls when a turn has more. Removing a chip that others depended
  * on says so in a toast at the foot of the pitch with Undo; the trash asks ("Clear 4?") before clearing.
  * The bottom panel's rows have fixed heights so the pitch never resizes mid-plan; defenders draw
- * under our team and the holder on top; at most two AI suggestions show, with 44 px ✓/× chips.
+ * under our team and the holder on top.
  * The game is a Play (setup + one step per turn): the header's Save stores it through the editor's
  * save path, and leaving with unsaved turns asks first (back arrow confirm + beforeunload).
  * Win condition (engine/builderGame.ts): score within TURN_LIMIT turns. The counter reads "Turn 3/6";
@@ -31,7 +36,7 @@
  * A game saved from here carries builder bookkeeping on each step; /builder/[id] reopens it and the
  * history, score and holder are rebuilt by re-simulating the steps (engine/builderReplay.ts).
  * @props { initialPlay?: Play } — a saved game to reopen; omitted = a new game
- * @dataDependencies engine/turnBuilder, engine/builderReplay, engine/simulator (simulateStep/sampleTimeline), engine/attackingAI, engine/defaultPlay, engine/follow
+ * @dataDependencies engine/turnBuilder, engine/teamShape, engine/builderReplay, engine/simulator (simulateStep/sampleTimeline), engine/defaultPlay, engine/follow
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -45,8 +50,8 @@ import { GOAL_CENTRE_X, GOAL_HALF_W, GOAL_LINE_Y, NET_DEPTH_M, detectGoal } from
 import { SHOT_RANGE_M, distToSegment, rollShot, shotChance } from '@/lib/engine/shot'
 import { dribbleRisk, passRisk, rollRisk, type Defender, type Risk } from '@/lib/engine/risk'
 import { newFollowTrack } from '@/lib/engine/follow'
-import { computeAutoMovements, type PitchState } from '@/lib/engine/attackingAI'
-import { drawOrder, pickSuggestions } from '@/lib/engine/builderHints'
+import { drawOrder } from '@/lib/engine/builderHints'
+import { planTeamShape, supportMovesToPlayerMoves, type SupportMove } from '@/lib/engine/teamShape'
 import { builderTitle, hasUnsavedWork } from '@/lib/engine/builderSave'
 import { replayGame } from '@/lib/engine/builderReplay'
 import { TURN_LIMIT, gameOutcome, turnCounterLabel, turnsLeft } from '@/lib/engine/builderGame'
@@ -102,8 +107,6 @@ const QUEUE_H = 54
 const TIMELINE_H = 62
 const LANE_H = 20
 const CONTROLS_H = 48
-/** Suggestion ✓ / × chip radius in svg units: 45 ≈ a 44 px target at a 375 px phone width. */
-const CHIP_R = 45
 const PANEL_BODY_H = STATUS_H + 8 + QUEUE_H + 8 + TIMELINE_H + 10 + CONTROLS_H
 /** Chip colour for a chance to score: green when likely, amber when even, red when a long shot. */
 const chanceColor = (p: number) => (p >= 0.5 ? '#16a34a' : p >= 0.25 ? '#d97706' : '#dc2626')
@@ -184,9 +187,6 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const [scrubT, setScrubT] = useState<number | null>(null)
   // A block being dragged to a new start time: visual position until the pointer lifts.
   const [blockDrag, setBlockDrag] = useState<{ index: number; start: number } | null>(null)
-  // Attacking-AI suggestions the user has waved away; cleared when a new turn starts.
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
-  useEffect(() => setDismissed(new Set()), [turn])
   useEffect(() => setScrubT(null), [queue, phase, historyIdx])
 
   // A new game (crypto.randomUUID → client only), or a saved one rebuilt turn by turn.
@@ -322,6 +322,22 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const projectedHolder = holderAfter(holder, queue)
   const tlDuration = schedule ? Math.max(MIN_TURN_S, schedule.length + TURN_TAIL_S) : 0
 
+  // Attacking AI (engine/teamShape.ts): where the teammates the user did not command go while the
+  // queued turn plays. Pure and deterministic, so the arrows, Preview, Play and a reopened game agree.
+  const support = useMemo<SupportMove[]>(() => {
+    if (!play || !schedule || queue.length === 0) return []
+    return planTeamShape({
+      players: play.players.map((p) => ({ id: p.id, team: p.team, label: p.label })),
+      positions: basePositions,
+      homes: Object.fromEntries(play.players.map((p) => [p.id, [p.x, p.y] as Pt])),
+      attackingTeam: 'ours',
+      holder,
+      queue,
+      schedule,
+    })
+  }, [play, schedule, queue, basePositions, holder])
+  const supportMoves = useMemo(() => supportMovesToPlayerMoves(support), [support])
+
   // Shooting: the keeper saves (the roll homes a saved shot onto him); other defenders can block.
   const keeperId = useMemo(() => play?.players.find((p) => p.team === 'opp' && /gk/i.test(p.label))?.id ?? null, [play])
   const blockers = useMemo<Pt[]>(
@@ -356,13 +372,13 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const draft = useMemo(() => {
     if (!play || phase !== 'plan' || inHistory || queue.length === 0) return null
     const stepIndex = play.steps.length
-    const step = turnStep(queue, basePositions, stepIndex)
+    const step = turnStep(queue, basePositions, stepIndex, {}, supportMoves)
     const nextPlay: Play = { ...play, steps: [...play.steps, step] }
     const start = chain ? chain.state : initialState(nextPlay)
     const startBall: Pt = chain ? chain.ball : (basePositions[holder ?? ''] ?? [PITCH_W / 2, PITCH_H / 2])
     const tl = simulateStep(nextPlay, stepIndex, start, holder, startBall)
     return { nextPlay, tl }
-  }, [play, phase, inHistory, queue, basePositions, chain, holder])
+  }, [play, phase, inHistory, queue, basePositions, chain, holder, supportMoves])
 
   // What the pitch shows right now: playback frame > scrub frame > history snapshot > planning state.
   const frame =
@@ -377,27 +393,6 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     return basePositions
   }, [frame, viewSnapshot, basePositions])
 
-  // Attacking-AI suggestions (engine/attackingAI.ts): recomputed against the queued turn so a queued
-  // pass yields the passer's support run; hidden mid-gesture, while scrubbing, in history and playback.
-  const suggestions = useMemo(() => {
-    if (!play || phase !== 'plan' || inHistory || selected || scrubT !== null) return []
-    const draftStep = turnStep(queue, basePositions, play.steps.length)
-    const holderPos = holder ? basePositions[holder] : null
-    const state: PitchState = {
-      players: play.players.map((p) => {
-        const pos = basePositions[p.id] ?? [p.x, p.y]
-        return { id: p.id, team: p.team, x: pos[0], y: pos[1] }
-      }),
-      ball: { x: holderPos?.[0] ?? PITCH_W / 2, y: holderPos?.[1] ?? PITCH_H / 2, holderId: holder },
-      attackingTeam: 'ours',
-    }
-    const all = computeAutoMovements(draftStep, state, new Set()).filter((s) => !dismissed.has(s.playerId))
-    return pickSuggestions(all, {
-      ball: [state.ball.x, state.ball.y],
-      positions: basePositions,
-      isKeeper: (id) => /gk/i.test(labelOf(id)),
-    })
-  }, [play, phase, inHistory, selected, scrubT, queue, basePositions, holder, dismissed, labelOf])
 
   const shownHolder = frame ? frame.ball.holder : viewSnapshot ? viewSnapshot.holder : holder
 
@@ -660,7 +655,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       }
       if (rolled) {
         const stepIndex = play.steps.length
-        const step = turnStep(queue, basePositions, stepIndex, outcomes)
+        const step = turnStep(queue, basePositions, stepIndex, outcomes, supportMoves)
         nextPlay = { ...play, steps: [...play.steps, step] }
         const start = chain ? chain.state : initialState(nextPlay)
         const startBall: Pt = chain ? chain.ball : (basePositions[holder ?? ''] ?? [PITCH_W / 2, PITCH_H / 2])
@@ -803,6 +798,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       ? schedule.plans.filter((p) => scrubSeconds >= p.start && scrubSeconds <= p.end).map((p) => actionLabel(p.action, labelOf))
       : []
 
+  const withYou = support.length > 0 ? ` · ${support.length} move with the plan` : ''
   const status =
     phase === 'setup'
       ? holder
@@ -825,8 +821,10 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                     : `${labelOf(selected)} has the ball — tap a teammate to pass, the pitch to dribble, or the goal to shoot`
                   : `${labelOf(selected)} — tap the pitch to queue a run (beyond the area = max-distance run)`
                 : outcome === 'playing' && turnsLeft(turnsPlayed) === 1
-                  ? `Last turn — score now, or rewind and replan`
-                  : 'Tap a blue player to select; actions chain in queue order'
+                  ? `Last turn — score now, or rewind and replan${withYou}`
+                  : support.length > 0
+                    ? `${support.length} teammate${support.length === 1 ? '' : 's'} move with the plan (dotted) — tap one to command him instead`
+                    : 'Tap a blue player to select; actions chain in queue order'
 
   // timeline lanes: one row per player that has actions, in order of first appearance
   const lanes: string[] = []
@@ -875,9 +873,6 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
           <PitchSurface />
           <PitchMarkings />
           <defs>
-            <marker id="builder-arrow-suggest" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M0 0L10 5L0 10z" fill="#86efac" />
-            </marker>
             <clipPath id="builder-pitch-clip">
               <rect x={0} y={0} width={680} height={1050} />
             </clipPath>
@@ -942,58 +937,30 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
             )
           })()}
 
-          {/* attacking-AI suggestions (dashed green) — ✓ queues the run, × dismisses it */}
-          {suggestions.map((s) => {
-            const from = planned[s.playerId] ?? basePositions[s.playerId]
-            if (!from) return null
-            const a = pt(from[0], from[1])
-            const b = pt(s.toX, s.toY)
-            const len = Math.hypot(b.x - a.x, b.y - a.y) || 1
-            // Chips are 44 px thumb targets (R svg units ≈ 44 css px at phone width). The ✓ sits
-            // 60% along the arrow, the × beside the arrowhead — both off the player, so neither
-            // steals his tap target.
-            const mid = { x: a.x + (b.x - a.x) * 0.6, y: a.y + (b.y - a.y) * 0.6 }
-            const xChip = { x: b.x + (-(b.y - a.y) / len) * (CHIP_R + 24), y: b.y + ((b.x - a.x) / len) * (CHIP_R + 24) }
-            return (
-              <g key={`sug-${s.playerId}`} data-testid={`suggestion-${s.playerId}`}>
-                <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#86efac" strokeWidth={3} strokeDasharray="10 7" opacity={0.55} markerEnd="url(#builder-arrow-suggest)" pointerEvents="none" />
-                <g
-                  style={{ cursor: 'pointer' }}
-                  data-testid={`suggest-accept-${s.playerId}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    // Suggestions are short, but clamp to the movement budget just in case.
-                    const fp = planned[s.playerId] ?? basePositions[s.playerId]
-                    let tx = s.toX
-                    let ty = s.toY
-                    if (fp) {
-                      const d = Math.hypot(tx - fp[0], ty - fp[1])
-                      if (d > RUN_RANGE_M) {
-                        tx = fp[0] + ((tx - fp[0]) * RUN_RANGE_M) / d
-                        ty = fp[1] + ((ty - fp[1]) * RUN_RANGE_M) / d
-                      }
-                    }
-                    setQueue((q) => queueAction(q, { kind: 'run', playerId: s.playerId, toX: tx, toY: ty }))
-                    setFlash(`${labelOf(s.playerId)} run queued (AI)`)
-                  }}
-                >
-                  <circle cx={mid.x} cy={mid.y} r={CHIP_R} fill="rgba(22,163,74,0.85)" stroke="rgba(255,255,255,0.5)" strokeWidth={2} />
-                  <text x={mid.x} y={mid.y + 9} textAnchor="middle" fontSize={26} fill="white" fontWeight={700} pointerEvents="none">✓</text>
+          {/* attacking-AI moves (thin dotted green, no chips): the teammates moving with the plan */}
+          {!frame &&
+            !inHistory &&
+            phase === 'plan' &&
+            support.map((m) => {
+              const f = pt(m.from[0], m.from[1])
+              const t = pt(m.to[0], m.to[1])
+              const d = Math.hypot(t.x - f.x, t.y - f.y) || 1
+              const ux = (t.x - f.x) / d
+              const uy = (t.y - f.y) / d
+              return (
+                <g key={`support-${m.playerId}`} pointerEvents="none" data-testid={`support-${m.playerId}`} data-reason={m.reason}>
+                  <line x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke="#86efac" strokeWidth={2.5} strokeDasharray="3 7" strokeLinecap="round" opacity={0.7} />
+                  <polyline
+                    points={`${t.x - ux * 12 - uy * 6},${t.y - uy * 12 + ux * 6} ${t.x},${t.y} ${t.x - ux * 12 + uy * 6},${t.y - uy * 12 - ux * 6}`}
+                    fill="none"
+                    stroke="#86efac"
+                    strokeWidth={2.5}
+                    strokeLinejoin="round"
+                    opacity={0.7}
+                  />
                 </g>
-                <g
-                  style={{ cursor: 'pointer' }}
-                  data-testid={`suggest-dismiss-${s.playerId}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setDismissed((prev) => new Set([...prev, s.playerId]))
-                  }}
-                >
-                  <circle cx={xChip.x} cy={xChip.y} r={CHIP_R} fill="rgba(0,0,0,0.6)" stroke="rgba(255,255,255,0.35)" strokeWidth={2} />
-                  <text x={xChip.x} y={xChip.y + 9} textAnchor="middle" fontSize={26} fill="#f87171" fontWeight={700} pointerEvents="none">×</text>
-                </g>
-              </g>
-            )
-          })}
+              )
+            })}
 
           {/* queued ghost arrows — one per scheduled action, chained segments included */}
           {!frame &&
