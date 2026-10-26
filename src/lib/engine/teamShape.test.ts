@@ -6,7 +6,7 @@ import { initialState, simulateStep } from '@/lib/engine/simulator'
 import { replayGame } from '@/lib/engine/builderReplay'
 import { MOVE_MPS, scheduleTurn, turnStep, type BuilderAction } from '@/lib/engine/turnBuilder'
 import {
-  DEF_MAX_DEPTH,
+
   MAX_SHAPE_M,
   MAX_RUN_M,
   SPACING_M,
@@ -20,6 +20,8 @@ import {
   type ShapeInput,
   type SupportMove,
 } from '@/lib/engine/teamShape'
+import { tableSlots } from '@/lib/engine/formationTable'
+import { PITCH_H } from '@/lib/engine/pitch'
 import type { Play } from '@/lib/types/play'
 
 type Pt = [number, number]
@@ -60,34 +62,36 @@ describe('formationLines', () => {
 })
 
 describe('shape rules', () => {
-  // RCM dribbles straight up 15 m: the ball ends at (43, 49), 14 m above the midfield home line (35).
+  // RCM dribbles straight up 15 m: the ball ends at (43, 49).
   const up: BuilderAction[] = [{ kind: 'dribble', playerId: 'o-RCM', toX: 43, toY: 49 }]
 
-  it('U2 — the block lifts with the ball: forwards 1:1, the defence at 60%', () => {
+  it('U2 — the block follows the ball up the pitch (formation table), nobody stays behind', () => {
     const moves = plan(up)
-    // LST is on shape (RST takes the depth run): home (26, 47) → lift 14 → 61, cut to the 12 m cap
-    const lst = byId(moves, 'o-LST')!
-    expect(lst.reason).toBe('shape')
-    expect(lst.to[1]).toBeGreaterThan(47 + 11)
-    // the far-side full-back: home (10, 20) → 20 + 14 × 0.6 = 28.4
-    const lb = byId(moves, 'o-LB')!
-    expect(lb.to[1]).toBeCloseTo(28.4, 1)
+    const f = finals(input(up), moves)
+    // every outfield player but the carrier moves up; the forwards most, the defence least
+    for (const pid of ours.filter((p) => p !== 'o-RCM')) expect(f[pid][1]).toBeGreaterThan(homes[pid][1] + 4)
+    expect(f['o-LST'][1]).toBeGreaterThan(47 + 10)
+    // the line order holds: defence < midfield < forwards
+    const mean = (ids: string[]) => ids.reduce((t, pid) => t + f[pid][1], 0) / ids.length
+    expect(mean(['o-LB', 'o-LCB', 'o-RCB', 'o-RB'])).toBeLessThan(mean(['o-LM', 'o-LCM', 'o-RCM', 'o-RM']))
+    expect(mean(['o-LM', 'o-LCM', 'o-RCM', 'o-RM'])).toBeLessThan(mean(['o-LST', 'o-RST']))
   })
 
   it('U3 — the block slides toward the ball side; the far-side wide player keeps his width', () => {
-    const moves = plan(up)
-    // LCB: home x 25 → 25 + 9 × 0.35 = 28.15
-    expect(byId(moves, 'o-LCB')!.to[0]).toBeCloseTo(28.15, 1)
-    // LB is wide on the far side: no shift
-    expect(byId(moves, 'o-LB')!.to[0]).toBeCloseTo(10, 5)
+    // RM dribbles up the right touchline: the centre-backs slide right, LM stays wide on the left
+    const q: BuilderAction[] = [{ kind: 'dribble', playerId: 'o-RM', toX: 62, toY: 50 }]
+    const f = finals(input(q, 'o-RM'), plan(q, 'o-RM'))
+    expect(f['o-LCB'][0]).toBeGreaterThan(25 + 2)
+    expect(f['o-RCB'][0]).toBeGreaterThan(43 + 2)
+    expect(f['o-LM'][0]).toBeLessThanOrEqual(16)
   })
 
-  it('U4 — the defence never goes further than 5 m past halfway', () => {
+  it('U4 — the centre-backs stay back for rest defence (never past 57.5 m) with the ball in the box', () => {
     const high: Record<string, Pt> = { 'o-RCM': [34, 80], 'o-LST': [26, 88], 'o-RST': [42, 88], 'o-LCB': [25, 50], 'o-RCB': [43, 50], 'o-LB': [10, 52], 'o-RB': [58, 52] }
     const moves = plan([{ kind: 'dribble', playerId: 'o-RCM', toX: 34, toY: 90 }], 'o-RCM', high)
-    for (const pid of ['o-LB', 'o-LCB', 'o-RCB', 'o-RB']) {
+    for (const pid of ['o-LCB', 'o-RCB']) {
       const m = byId(moves, pid)
-      if (m) expect(m.to[1]).toBeLessThanOrEqual(DEF_MAX_DEPTH + 1e-9)
+      if (m) expect(m.to[1]).toBeLessThanOrEqual(PITCH_H / 2 + 5 + 1e-9)
     }
   })
 
@@ -102,18 +106,19 @@ describe('shape rules', () => {
     for (const m of moves) expect(m.to[1]).toBeLessThanOrEqual(oppYs[1] - 1 + 1e-9)
   })
 
-  it('U6 — a long shape move is cut to the cap along its own direction', () => {
-    // LB starts far from his slot: home (10, 20) but standing at (10, 2)
-    const moves = plan(up, 'o-RCM', { 'o-LB': [10, 2] })
-    const lb = byId(moves, 'o-LB')!
-    expect(len(lb)).toBeCloseTo(MAX_SHAPE_M, 5)
-    expect(lb.to[0]).toBeCloseTo(10, 5)
-    expect(lb.to[1]).toBeCloseTo(14, 5)
+  it('U6 — a long shape move is cut to what he can run in the turn, along its own direction', () => {
+    // LB starts far from his slot: home (10, 20) but standing at (10, 2); the 15 m dribble lasts 2.5 s
+    const inp = input(up, 'o-RCM', { 'o-LB': [10, 2] })
+    const lb = byId(planTeamShape(inp), 'o-LB')!
+    expect(len(lb)).toBeCloseTo(Math.min(MAX_SHAPE_M, MOVE_MPS * inp.schedule.length), 5)
+    expect(lb.to[1]).toBeGreaterThan(lb.from[1] + 10)
   })
 
   it('U7 — moves under the deadband are dropped', () => {
-    // a 2 m nudge: the ball moves sideways only, the block shift is 0.7 m
-    const moves = plan([{ kind: 'dribble', playerId: 'o-RCM', toX: 45, toY: 34 }])
+    // everybody already stands on his table spot for a ball at (45, 34); a 2 m nudge moves the slots ~1 m
+    const slots = tableSlots([43, 34])
+    const atTable = Object.fromEntries(ours.filter((p) => p !== 'o-RCM').map((pid) => [pid, slots[pid.slice(2) as keyof typeof slots]]))
+    const moves = plan([{ kind: 'dribble', playerId: 'o-RCM', toX: 45, toY: 34 }], 'o-RCM', atTable)
     expect(moves.every((m) => len(m) >= 2.5)).toBe(true)
     // the far-side defenders have nothing to do
     expect(byId(moves, 'o-LB')).toBeUndefined()
@@ -199,7 +204,7 @@ describe('shape rules', () => {
     expect(b).toEqual(a)
   })
 
-  it('U13 — every move starts at 0 and ends inside the turn; a 12 m move takes 2 s', () => {
+  it('U13 — every move starts at 0 and ends inside the turn', () => {
     const inp = input(up)
     const moves = planTeamShape(inp)
     const dur = turnDuration(inp.schedule)
@@ -210,8 +215,9 @@ describe('shape rules', () => {
       expect(m.end).toBeLessThanOrEqual(dur + 1e-9)
       expect(m.end).toBeCloseTo(Math.min(dur, Math.max(0.5, len(m) / MOVE_MPS)), 6)
     }
-    const capped = moves.find((m) => Math.abs(len(m) - MAX_SHAPE_M) < 1e-6)!
-    expect(capped.end).toBeCloseTo(2, 6)
+    // a move capped by the time he has ends with the turn
+    const capped = moves.find((m) => Math.abs(len(m) - MOVE_MPS * dur) < 1e-6)!
+    expect(capped.end).toBeCloseTo(dur, 6)
   })
 })
 
@@ -315,9 +321,9 @@ describe('single-command scenarios (4-4-2, ball with RCM at (43, 34))', () => {
     // heads for the box; a quick shot leaves him only the flight time to get there
     expect(rst.to[1]).toBeGreaterThan(86)
     expect(moves.some((m) => m.reason === 'second-ball' && m.to[1] > m.from[1])).toBe(true)
-    for (const pid of ['o-LB', 'o-LCB', 'o-RCB', 'o-RB']) {
+    for (const pid of ['o-LCB', 'o-RCB']) {
       const m = byId(moves, pid)
-      if (m) expect(m.to[1]).toBeLessThanOrEqual(DEF_MAX_DEPTH + 1e-9)
+      if (m) expect(m.to[1]).toBeLessThanOrEqual(PITCH_H / 2 + 5 + 1e-9)
     }
   })
 
