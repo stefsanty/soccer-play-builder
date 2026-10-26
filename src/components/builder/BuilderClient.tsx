@@ -6,7 +6,9 @@
  * receiver's later actions waiting for the ball to arrive. A video-editor style timeline lays the
  * queued turn out in time: scrub it to preview any frame (ball position, who is doing what), and drag
  * an action block to retime when it starts (dependencies still win). Taps beyond the XCOM-style
- * movement range are capped to the range boundary. The carrier may tap the goal mouth to shoot
+ * movement range are capped to the range boundary; a second, white disc shows the pass range when the
+ * selected player will have the ball, with unreachable teammates dimmed (a too-far pass is still
+ * refused). The carrier may tap the goal mouth to shoot
  * (engine/shot.ts gives the chance; Play rolls the dice — a saved shot flies to the keeper, and the
  * ball comes back to the shooter either way). Passes and dribbles carry a risk % (engine/risk.ts)
  * from the defenders' positions, shown on the ghost arrow; Play rolls those too — an intercepted
@@ -827,6 +829,30 @@ export function BuilderClient() {
             )
           })()}
 
+          {/* pass range: a second, white disc when the selected player will have the ball — teammates
+              beyond it are dimmed, so a refused pass is no surprise (playtest issue 10) */}
+          {selected && phase === 'plan' && !inHistory && scrubT === null && allowedKinds(selected, projectedHolder).includes('pass') && (planned[selected] ?? basePositions[selected]) && (() => {
+            const p0 = planned[selected] ?? basePositions[selected]
+            const c = pt(p0[0], p0[1])
+            const r = PASS_RANGE_M * 10
+            // label sits where the arc crosses the pitch's vertical centre line, toward the opponent goal
+            const lx = c.x
+            const ly = clamp(c.y - r, 20, 1030)
+            return (
+              <g clipPath="url(#builder-pitch-clip)" pointerEvents="none" data-testid="pass-range">
+                <circle cx={c.x} cy={c.y} r={r} fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.7)" strokeWidth={2.5} strokeDasharray="14 10" />
+                {c.y - r > 0 && (
+                  <>
+                    <rect x={lx - 44} y={ly - 24} width={88} height={22} rx={11} fill="rgba(11,16,21,0.75)" />
+                    <text x={lx} y={ly - 8} textAnchor="middle" fontSize={13} fontWeight={700} fill="rgba(255,255,255,0.9)">
+                      pass range
+                    </text>
+                  </>
+                )}
+              </g>
+            )
+          })()}
+
           {/* shoot target: the goal mouth lights up when the selected carrier is within range */}
           {selected && phase === 'plan' && !inHistory && scrubT === null && allowedKinds(selected, projectedHolder).includes('shot') && (() => {
             const p0 = planned[selected] ?? basePositions[selected]
@@ -953,10 +979,22 @@ export function BuilderClient() {
             const isSel = selected === p.id
             const isHolder = shownHolder === p.id
             const tappable = isOurs && !running && !inHistory
+            // a teammate the selected carrier cannot reach with a pass is dimmed
+            const outOfPassRange =
+              isOurs &&
+              !!selected &&
+              selected !== p.id &&
+              phase === 'plan' &&
+              !inHistory &&
+              scrubT === null &&
+              allowedKinds(selected, projectedHolder).includes('pass') &&
+              !actionInRange({ kind: 'pass', playerId: selected, to: p.id }, planned)
             return (
               <g
                 key={p.id}
                 transform={`translate(${c.x}, ${c.y})`}
+                opacity={outOfPassRange ? 0.45 : 1}
+                data-out-of-range={outOfPassRange || undefined}
                 onClick={(e) => {
                   if (!tappable) return
                   e.stopPropagation()
