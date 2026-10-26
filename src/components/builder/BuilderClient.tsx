@@ -192,7 +192,10 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   // A new game (crypto.randomUUID → client only), or a saved one rebuilt turn by turn.
   useEffect(() => {
     if (!initialPlay) {
-      setPlay({ ...createDefaultPlay(), title: builderTitle(new Date()) })
+      // Public like every other saved play (MVP has no auth): the library lists public plays only,
+      // so a private game could be saved but never found again.
+      const fresh = createDefaultPlay()
+      setPlay({ ...fresh, title: builderTitle(new Date()), meta: { ...fresh.meta, isPublic: true } })
       return
     }
     const nameOf = (id: string) => initialPlay.players.find((p) => p.id === id)?.label ?? id
