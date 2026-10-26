@@ -93,6 +93,10 @@ export const REST_COUNT = 3
 export const REST_BEHIND = 10
 /** In a 'back' turn a forward or midfielder drops at most this share of the ball's retreat. */
 export const BACK_HOLD = 0.5
+/** In a 'back' turn the forwards hold the line: they drop at most this much (a recycle pass is not a retreat). */
+export const FWD_BACK_MAX = 3
+/** A support job (angle, outlet, run beyond, overlap) never drops a player more than this below where he stands. */
+export const MAX_JOB_DROP = 5
 export const OFFSIDE_MARGIN = 1
 /** Only players this close to the ball's end are support / second-ball candidates. */
 export const SUPPORT_REACH = 25
@@ -194,9 +198,11 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
   const opp = players.filter((p) => p.team !== attackingTeam && positions[p.id])
   const planned = schedule.planned
 
-  // 1. frozen: keeper, commanded players, pass receivers
+  // 1. frozen: keeper, the carrier, commanded players, pass receivers
   const frozen = new Set<string>()
   for (const p of players) if (p.team === attackingTeam && lines.role(p.id) === 'gk') frozen.add(p.id)
+  // the carrier keeps the ball where it is: moving him would be a dribble the user did not command
+  frozen.add(holder)
   for (const a of queue) {
     frozen.add(a.playerId)
     if (a.kind === 'pass') frozen.add(a.to)
@@ -231,7 +237,9 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
     if (role === 'def') d = Math.min(d, DEF_MAX_DEPTH)
     if (phase === 'back') {
       if (role === 'def') return c
-      d = Math.max(d, c[1] - Math.abs(advance) * BACK_HOLD)
+      // the midfield drops with the ball (half its retreat); the forwards hold the line so the team
+      // keeps its depth — a pass back to recycle is not a retreat
+      d = Math.max(d, c[1] - (role === 'fwd' ? FWD_BACK_MAX : Math.abs(advance) * BACK_HOLD))
     } else if (phase === 'forward') {
       // the ball goes forward: nobody drops
       d = Math.max(d, c[1])
@@ -287,8 +295,10 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
     const runner = nearest(fwds)[0]
     if (runner) {
       const c = cur(runner)
-      const slot: Pt = ball[1] >= BOX_DEPTH ? farPost : [c[0] + (ball[0] - c[0]) * 0.3, ball[1] + DEPTH_RUN]
-      jobs.set(runner, { to: slot, reason: 'depth' })
+      if (ball[1] >= BOX_DEPTH) jobs.set(runner, { to: farPost, reason: 'depth' })
+      // a forward already beyond the run's end IS the depth: he holds his height (the shape lifts him)
+      // instead of dropping toward a deep carrier
+      else if (c[1] < ball[1] + DEPTH_RUN) jobs.set(runner, { to: [c[0] + (ball[0] - c[0]) * 0.3, ball[1] + DEPTH_RUN], reason: 'depth' })
     }
     // the overlap: a deeper wide player on the carrier's side
     if (Math.abs(ball[0] - CENTRE_X) >= CARRIER_WIDE_M) {
@@ -326,8 +336,16 @@ export function planTeamShape(input: ShapeInput): SupportMove[] {
   const reason = new Map<string, SupportReason>()
   for (const id of free) {
     const j = jobs.get(id)
-    target.set(id, j ? [...j.to] : shapeTarget(id))
-    reason.set(id, j ? j.reason : 'shape')
+    if (j) {
+      // a support job is a step toward the ball, not a retreat: in build-up from the back the midfield
+      // shows for the ball beside and slightly ahead of a deep carrier instead of dropping into the defence
+      const floor = phase === 'shot' ? -Infinity : cur(id)[1] - MAX_JOB_DROP
+      target.set(id, [j.to[0], Math.max(j.to[1], floor)])
+      reason.set(id, j.reason)
+    } else {
+      target.set(id, shapeTarget(id))
+      reason.set(id, 'shape')
+    }
   }
 
   // 5. rest defence: three outfielders at least REST_BEHIND behind a ball in the opponent half
