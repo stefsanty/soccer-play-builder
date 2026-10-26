@@ -115,6 +115,15 @@ export function sanitizeQueue(queue: BuilderAction[], startHolder: string | null
   return kept
 }
 
+/** Remove the chip at `index` and whatever depended on it; `dropped` lists those dependents (not
+ *  the removed action itself) so the UI can say "Removed 2 dependent actions — Undo". */
+export function removeAction(queue: BuilderAction[], index: number, startHolder: string | null): { queue: BuilderAction[]; dropped: BuilderAction[] } {
+  const without = queue.filter((_, j) => j !== index)
+  const kept = sanitizeQueue(without, startHolder)
+  const keptSet = new Set(kept)
+  return { queue: kept, dropped: without.filter((a) => !keptSet.has(a)) }
+}
+
 export function actionLabel(action: BuilderAction, labelOf: (id: string) => string): string {
   if (action.kind === 'pass') return `${labelOf(action.playerId)} → ${labelOf(action.to)}`
   return `${labelOf(action.playerId)} ${action.kind === 'dribble' ? 'dribbles' : action.kind === 'shot' ? 'shoots' : 'runs'}`
