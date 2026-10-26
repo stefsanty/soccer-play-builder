@@ -29,7 +29,7 @@ These are the rules a coach teaches. Each one maps to a rule in the engine (sect
 | **Compactness** | The three lines stay 10–15 m apart. Nobody drifts off alone. | line lift ratios + spacing |
 | **Rest defence** | While attacking, at least three outfield players stay 10 m or more behind the ball, so a lost ball does not become a counter. | rest-defence rule |
 | **Offside** | No run beyond the second-last defender's line. | offside cap |
-| **Pass and move** | After a pass the passer offers himself again. | kept as the one remaining *suggestion* (✓/×); the passer's command is a pass, the AI does not add to it |
+| **Pass and move** | After a pass the passer offers himself again. | `pass-move`: once the ball leaves him, the passer runs beside-and-behind the receiver on the side he passed from, bounded by the time left in the turn |
 | **Crash the box** | On a shot the forwards attack near post, far post and penalty spot for rebounds; the midfield holds the edge of the box for the second ball. | box slots on a shot turn |
 | **Find space** | A support position inside a defender's reach is useless; the player shifts to the free side of him. | opponent clearance |
 | **Do not clump** | Two attackers within 7 m take away each other's space. | spacing |
@@ -41,7 +41,7 @@ These are the rules a coach teaches. Each one maps to a rule in the engine (sect
 | **Dribble forward** | The whole block moves up with the ball. The nearest free forward runs beyond the ball. Two near players give support angles (one underneath each side); a wide player on the ball side pushes on down the touchline instead of tucking in. If the carrier is wide, the full-back behind him overlaps. Three outfield players stay 10 m behind. |
 | **Dribble back** | Nobody drops with him more than half his retreat (forwards and midfield hold the line; the defence holds). No runs beyond. The deeper players already behind him are the recycle options. |
 | **Dribble sideways / no ball movement** | The block slides slightly toward the ball side; the far-side wide player keeps his width. Support angles re-form around the carrier. Nothing else moves much. |
-| **Pass** | The receiver is left exactly where the ball is going (the pass is aimed at him — the AI never moves him). The team re-forms around the *receiver's* position: support angles for him, a third-man run beyond him, the block lifts to his depth. The passer gets the pass-and-move suggestion. |
+| **Pass** | The receiver is left exactly where the ball is going (the pass is aimed at him — the AI never moves him). The team re-forms around the *receiver's* position: support angles for him, a third-man run beyond him, the block lifts to his depth. The passer moves again once his pass is away (pass and move), unless he has a later action of his own. |
 | **Off-ball run** | The ball does not move, so the shape holds. The runner is the user's; the AI does not fill the space he vacated (the run is meant to open it). Support angles stay around the carrier. |
 | **Shot** | Forwards crash the box slots; the midfield holds the edge of the box; the defence holds its rest-defence depth. |
 
@@ -88,7 +88,7 @@ In the default 4-4-2: defence LB LCB RCB RB; midfield LM LCM RCM RM; forwards LS
   changes. Commanding a player removes his AI arrow (the user's arrow replaces it).
 - The status line says how many teammates move with the plan ("· 8 move with you").
 - Preview, the timeline scrub and Play show the AI moves (they are ordinary moves in the step).
-- The ✓/× suggestion stays for exactly one case: the passer's pass-and-move run.
+- The old ✓/× suggestion chips are gone from the builder: the moves they offered are now made by the AI, and the chips sat on the ball and the opposing midfield in both retests.
 - Rewind snapshots, Replan from here, Save and reopen all work unchanged (the AI moves are
   stored in the step like any run; replay re-simulates them).
 
@@ -128,6 +128,7 @@ queue (user) ──► scheduleTurn ──► TurnSchedule (plans, planned posit
 export type SupportReason =
   | 'shape'        // block lift / shift toward the formation slot
   | 'support'      // support angle beside-and-behind the carrier
+  | 'pass-move'    // the passer offers himself again once his pass is away
   | 'wide'         // wide outlet ahead of the ball on the touchline
   | 'depth'        // run beyond the ball (third man)
   | 'overlap'      // outside the wide carrier
@@ -160,8 +161,12 @@ export interface ShapeInput {
 All distances in metres; `dir` = +1 when attacking toward y = 105 (ours).
 
 1. **Frozen set.** The keeper, every player with a queued action, and every receiver of a queued
-   pass. The AI never moves them. (The receiver is frozen because the pass is aimed at his
-   planned spot and its risk % was computed on that lane.)
+   pass. The AI never moves them during their actions. (The receiver is frozen because the pass is
+   aimed at his planned spot and its risk % was computed on that lane.) One addition: a passer
+   whose last queued action is his pass gets a **pass-and-move** run that starts when the pass ends
+   (`(receiver.x + side·9, receiver.depth − 5)`, side = the side he passed from), capped by
+   `min(18, MOVE_MPS · (turnDuration − passEnd))`. Its slot is reserved before the support cast is
+   picked. The keeper never makes it.
 2. **Ball story.** `ballStart` = holder's position. End carrier = `holderAfter(holder, queue)`
    (the shooter when it is null); `ballEnd` = his planned position. `advance = (ballEnd.y −
    ballStart.y) · dir`. Phase: `shot` if a shot is queued; `forward` if advance > 3; `back` if
@@ -189,12 +194,12 @@ All distances in metres; `dir` = +1 when attacking toward y = 105 (ours).
      `(lerp(his.x, ballEnd.x, 0.3), ballEnd.depth + 12)`. When `ballEnd.depth ≥ 80` the run
      goes to the far-post slot instead (penalty-box behaviour).
    - **Overlap** (`forward` / `lateral`, carrier wide: |ballEnd.x − 34| ≥ 16): the free wide
-     player on the carrier's side who is 5–25 m deeper than `ballEnd` runs to
+     player on the carrier's side who is 5–35 m deeper than `ballEnd` runs to
      `(ballEnd.x + side·5, ballEnd.depth + 10)` (x clamped to [4, 64]).
-   - **Support angles** (two): candidates are free non-forwards within 25 m of `ballEnd`, nearest
-     first. A central candidate takes the slot on his own side of the ball:
-     `(ballEnd.x − side·9, ballEnd.depth − 5)` (side = sign of his x relative to the ball; 0 →
-     left first). If that side's slot is taken, he takes the other side; if both are taken he
+   - **Support angles** (two): candidates are free non-forwards within 25 m of `ballEnd`,
+     midfielders before defenders, nearest first. A central candidate takes the slot on his own
+     side of the ball: `(ballEnd.x + side·9, ballEnd.depth − 5)` (side = sign of his x relative
+     to the ball; 0 → left first). If that side's slot is taken, he takes the other side; if both are taken he
      stays on shape. A wide candidate takes the wide outlet instead: `(his shape x, ballEnd.depth + 6)`.
 6. **Rest defence** (`forward` / `lateral` / `shot` when `ballEnd.depth > 52.5`): count attackers
    (frozen at their planned positions, free at their targets, keeper excluded) with
@@ -204,13 +209,14 @@ All distances in metres; `dir` = +1 when attacking toward y = 105 (ours).
 7. **Constraints**, three deterministic rounds in players-array order:
    - Offside: `target.depth ≤ max(52.5, secondLastOpponentDepth − 1)`.
    - Bounds: x ∈ [4, 64], depth ∈ [3, 102].
-   - Move cap: `|target − current| ≤ min(12, MOVE_MPS · turnDuration)`; a longer move is cut to
-     the cap along its direction (still tagged with its reason).
+   - Move cap: `|target − current| ≤ min(cap, MOVE_MPS · turnDuration)`, cap = 12 m for a shape or
+     rest move, 18 m for a triggered run; a longer move is cut to the cap along its direction
+     (still tagged with its reason).
    - Spacing: any two attackers closer than 7 m (final positions: planned for frozen, target for
      free) are pushed apart along the line between them, the free one(s) moving (half each when
      both are free).
-   - Clearance: a target within 4 m of an opponent's start position is pushed directly away from
-     him to 4 m.
+   - Clearance: a target within 4 m of an opponent's start position steps sideways (same depth)
+     until it is 4 m from him — space is found beside a defender, not past him.
 8. **Deadband and timing.** Drop moves under 2.5 m. `start = 0`, `end = clamp(dist / MOVE_MPS,
    MIN_ACTION_S, turnDuration)` where `turnDuration = max(MIN_TURN_S, schedule.length + TURN_TAIL_S)`.
 
@@ -229,9 +235,9 @@ All distances in metres; `dir` = +1 when attacking toward y = 105 (ours).
 - **User commands win.** A commanded player, a pass receiver and the keeper are never moved by
   the AI. Queueing a run for a player removes his AI arrow at once.
 - **Risk %, shot %**: unchanged — computed from the defenders' positions at the turn start.
-- **Suggestions (✓/×)**: only the passer's pass-and-move run remains. The spacing / danger-zone
-  suggestions are gone because the AI now does those moves itself; this also clears the chips
-  that sat on the opposing midfield in the retests.
+- **Suggestions (✓/×)**: removed from the builder. The spacing / danger-zone runs and the passer's
+  pass-and-move are all made by the AI now; this also clears the chips that sat on the ball and
+  the opposing midfield in the retests. `engine/attackingAI.ts` still serves the editor.
 - **Dice**: when a pass is intercepted or a dribble tackled, the AI moves still happen (the
   teammates ran expecting the ball). The next turn plans from where everybody ended.
 - **Snapshots**: AI movers are interpolated i/N between start and end like the defenders.
@@ -241,8 +247,9 @@ All distances in metres; `dir` = +1 when attacking toward y = 105 (ours).
 
 `LINE_GAP_M 8 · WIDE_M 18 · LIFT = {def 0.6, mid 1, fwd 1} · DEF_MAX_DEPTH 57.5 · SHIFT_K 0.35 ·
 SHIFT_MAX 10 · SUP_SIDE 9 · SUP_BACK 5 · WIDE_AHEAD 6 · DEPTH_RUN 12 · OVERLAP_OUT 5 ·
-OVERLAP_AHEAD 10 · BOX_DEPTH 80 · MAX_SHAPE_M 12 · SPACING_M 7 · CLEAR_M 4 · DEADBAND_M 2.5 ·
-REST_COUNT 3 · REST_BEHIND 10 · BACK_HOLD 0.5 · OFFSIDE_MARGIN 1`
+OVERLAP_AHEAD 10 · OVERLAP_MIN/MAX_BEHIND 5/35 · CARRIER_WIDE_M 16 · BOX_DEPTH 80 · MAX_SHAPE_M 12 ·
+MAX_RUN_M 18 · SPACING_M 7 · CLEAR_M 4 · DEADBAND_M 2.5 · REST_COUNT 3 · REST_BEHIND 10 ·
+BACK_HOLD 0.5 · OFFSIDE_MARGIN 1 · SUPPORT_REACH 25 · SLOT_TAKEN_M 5 · PHASE_DEADBAND 3`
 
 ## 5. Test plan
 
@@ -263,6 +270,7 @@ REST_COUNT 3 · REST_BEHIND 10 · BACK_HOLD 0.5 · OFFSIDE_MARGIN 1`
 | U11 | rest defence | with the ball at depth 70, at least 3 outfield attackers end ≥ 10 m behind it |
 | U12 | determinism | same input twice → deep-equal output; the result does not depend on `Math.random` |
 | U13 | timing | every move starts at 0 and ends ≤ the turn's duration; a 12 m move ends at 2 s |
+| U14 | pass and move | the passer's run starts at his pass's end, heads beside-and-behind the receiver on his side; a passer with a later action of his own gets none; the keeper gets none |
 
 ### 5.2 Scenario tests (one command only, default 4-4-2, ball with RCM at (43, 34))
 
@@ -271,7 +279,7 @@ REST_COUNT 3 · REST_BEHIND 10 · BACK_HOLD 0.5 · OFFSIDE_MARGIN 1`
 | S1 | RCM dribbles to (43, 49) | phase forward; every free outfielder's target depth ≥ his start − 0.1; RST (nearest forward) has a `depth` move ending ≥ 10 m beyond 49; LCM has a `support` move left-and-behind the ball (x < 43, y < 49); RM has a `wide` move with x ≥ 55 and y > 49; LM keeps x ≤ 12 (width); ≥ 3 outfielders end ≤ 39; no two attackers within 5 m; all moves ≤ 12 m; GK and RCM untouched |
 | S2 | RCM dribbles to (43, 24) | phase back; no `depth` / `support` moves; no forward or midfielder drops more than 5 m; no defender moves |
 | S3 | LM runs to (6, 50) (ball stays) | phase lateral; LM has no AI move (commanded); the ball's support angles exist around RCM; no free player moves more than 12 m; forwards do not drop |
-| S4 | RCM passes to RST | RST and RCM get no AI move; LST has a `depth` move beyond RST's position; support angles are around RST (42, 47), not around RCM |
+| S4 | RCM passes to RST | RST gets no AI move, RCM only a `pass-move`; LST has a `depth` move beyond RST's position (bounded by the short pass turn); support angles are around RST (42, 47), not around RCM |
 | S5 | LST shoots from (30, 90) (positions moved up for the test) | RST has a `box` move to a post / penalty spot; a midfielder has a `second-ball` move at depth ≈ 85; no defender goes past 57.5 |
 | S6 | RM dribbles wide to (62, 50) | RB (wide, same side, deeper) has an `overlap` move outside and ahead of the ball (x ≥ 62, y > 50) |
 | S7 | turnStep with support | `turnStep(queue, positions, 1, {}, support)` carries the user's moves plus the AI's; its duration equals the version without support |
@@ -286,5 +294,5 @@ shot) plus the overlap case. The receiver-frozen decision (4.3 step 1) is checke
 
 - PR 1 — engine: `engine/teamShape.ts` + tests + this spec. No behaviour change in the app.
 - PR 2 — builder wiring: AI moves in the draft and resolved turns, dotted arrows, status count,
-  suggestions trimmed to pass-and-move, replay/e2e checks, before/after screenshots.
+  ✓/× suggestion chips removed, pass-and-move automatic, before/after screenshots.
 - Tuning after a production check at phone size; choices listed on each PR.

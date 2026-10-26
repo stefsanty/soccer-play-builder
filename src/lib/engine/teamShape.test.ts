@@ -135,18 +135,46 @@ describe('shape rules', () => {
     expect(Math.hypot(lcm.to[0] - 34, lcm.to[1] - 44)).toBeGreaterThanOrEqual(CLEAR_M - 1e-6)
   })
 
-  it('U10 — the keeper, commanded players and pass receivers are never moved', () => {
+  it('U10 — the keeper, commanded players and pass receivers are never moved (a passer only after his pass)', () => {
     const q: BuilderAction[] = [
       { kind: 'pass', playerId: 'o-RCM', to: 'o-RST' },
       { kind: 'run', playerId: 'o-LM', toX: 6, toY: 50 },
     ]
     const moves = plan(q)
-    const ids = moves.map((m) => m.playerId)
+    const ids = moves.filter((m) => m.reason !== 'pass-move').map((m) => m.playerId)
     expect(ids).not.toContain('o-GK')
     expect(ids).not.toContain('o-RCM')
     expect(ids).not.toContain('o-RST')
     expect(ids).not.toContain('o-LM')
     expect(ids.every((i) => i.startsWith('o-'))).toBe(true)
+    // the keeper never makes a pass-and-move run either
+    const gkPass = plan([{ kind: 'pass', playerId: 'o-GK', to: 'o-LCB' }], 'o-GK')
+    expect(byId(gkPass, 'o-GK')).toBeUndefined()
+  })
+
+  it('U14 — pass and move: the passer offers himself again once the ball has left him', () => {
+    const q: BuilderAction[] = [{ kind: 'pass', playerId: 'o-RCM', to: 'o-RST' }]
+    const inp = input(q)
+    const moves = planTeamShape(inp)
+    const rcm = byId(moves, 'o-RCM')!
+    expect(rcm.reason).toBe('pass-move')
+    const passEnd = inp.schedule.plans[0].end
+    expect(rcm.start).toBeCloseTo(passEnd, 6)
+    expect(rcm.end).toBeLessThanOrEqual(turnDuration(inp.schedule) + 1e-9)
+    // heads for the slot beside-and-behind RST (42, 47) on the side he passed from (the right)
+    expect(rcm.to[0]).toBeGreaterThan(43)
+    expect(rcm.to[1]).toBeGreaterThan(34)
+    expect(rcm.to[1]).toBeLessThan(47)
+    // a passer who dribbles on after his pass is commanded — no follow-up for him
+    const chained: BuilderAction[] = [
+      { kind: 'pass', playerId: 'o-RCM', to: 'o-RST' },
+      { kind: 'pass', playerId: 'o-RST', to: 'o-RCM' },
+      { kind: 'dribble', playerId: 'o-RCM', toX: 43, toY: 50 },
+    ]
+    const back = plan(chained)
+    expect(byId(back, 'o-RCM')).toBeUndefined()
+    // RST's pass is his last action: he follows it
+    expect(byId(back, 'o-RST')?.reason).toBe('pass-move')
   })
 
   it('U11 — rest defence: three outfielders stay 10 m behind a ball in the opponent half', () => {
@@ -250,7 +278,7 @@ describe('single-command scenarios (4-4-2, ball with RCM at (43, 34))', () => {
     const q: BuilderAction[] = [{ kind: 'pass', playerId: 'o-RCM', to: 'o-RST' }]
     const moves = plan(q)
     expect(byId(moves, 'o-RST')).toBeUndefined()
-    expect(byId(moves, 'o-RCM')).toBeUndefined()
+    expect(byId(moves, 'o-RCM')?.reason).toBe('pass-move')
     // the other forward makes the third-man run beyond RST (42, 47); a 13 m pass is a short turn
     // (MIN_TURN_S), so the run covers what fits in it — the AI never makes a turn longer
     const lst = byId(moves, 'o-LST')!
