@@ -120,6 +120,12 @@ export function actionLabel(action: BuilderAction, labelOf: (id: string) => stri
   return `${labelOf(action.playerId)} ${action.kind === 'dribble' ? 'dribbles' : action.kind === 'shot' ? 'shoots' : 'runs'}`
 }
 
+/** The chip-sized label: "RCM→RST", "LST run" — five chips used to overflow a 375 px row. */
+export function shortLabel(action: BuilderAction, labelOf: (id: string) => string): string {
+  if (action.kind === 'pass') return `${labelOf(action.playerId)}→${labelOf(action.to)}`
+  return `${labelOf(action.playerId)} ${action.kind}`
+}
+
 /** Set an action's authored start time (timeline drag), tenth-of-a-second resolution, never negative. */
 export function retimeAction(queue: BuilderAction[], index: number, delay: number): BuilderAction[] {
   const v = Math.max(0, Math.round(delay * 10) / 10)
