@@ -1,4 +1,5 @@
 // Play data model — the canonical schema for a saved play
+import type { BuilderAction, TurnOutcomes } from '@/lib/engine/turnBuilder'
 export type Formation = '4-4-2' | '4-5-1' | '4-3-3' | '3-5-2' | '4-2-3-1' | 'custom'
 
 export type TeamId = 'ours' | 'opp'
@@ -149,8 +150,24 @@ export interface OptionGroup {
   to: number | null
 }
 
+/**
+ * Turn Builder bookkeeping so a saved game reopens in /builder (the editor and viewer ignore it).
+ * The setup step carries who kicks off; every turn step carries what was queued, what the dice
+ * decided, who had the ball before and after, and whether the turn scored.
+ */
+export interface BuilderStepMeta {
+  kickoffHolder?: string
+  actions?: BuilderAction[]
+  outcomes?: TurnOutcomes
+  startHolder?: string | null
+  endHolder?: string | null
+  goal?: boolean
+}
+
 export interface PlayStep {
   ai?: { ours?: AiConfig; opp?: AiConfig }   // defensive AI per team
+  /** Set on games saved from /builder; lets the Turn Builder rebuild its history on reopen. */
+  builder?: BuilderStepMeta
   /** Starting ball spot in metres, authored on the setup step (steps[0]). Unset = centre pitch. */
   ballPosition?: { x: number; y: number }
   id: string

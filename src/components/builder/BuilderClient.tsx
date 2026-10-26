@@ -25,8 +25,10 @@
  * under our team and the holder on top; at most two AI suggestions show, with 44 px ✓/× chips.
  * The game is a Play (setup + one step per turn): the header's Save stores it through the editor's
  * save path, and leaving with unsaved turns asks first (back arrow confirm + beforeunload).
- * @props {}
- * @dataDependencies engine/turnBuilder, engine/simulator (simulateStep/sampleTimeline), engine/attackingAI, engine/defaultPlay, engine/follow
+ * A game saved from here carries builder bookkeeping on each step; /builder/[id] reopens it and the
+ * history, score and holder are rebuilt by re-simulating the steps (engine/builderReplay.ts).
+ * @props { initialPlay?: Play } — a saved game to reopen; omitted = a new game
+ * @dataDependencies engine/turnBuilder, engine/builderReplay, engine/simulator (simulateStep/sampleTimeline), engine/attackingAI, engine/defaultPlay, engine/follow
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -43,6 +45,7 @@ import { newFollowTrack } from '@/lib/engine/follow'
 import { computeAutoMovements, type PitchState } from '@/lib/engine/attackingAI'
 import { drawOrder, pickSuggestions } from '@/lib/engine/builderHints'
 import { builderTitle, hasUnsavedWork } from '@/lib/engine/builderSave'
+import { replayGame } from '@/lib/engine/builderReplay'
 import { SaveButton } from '@/components/editor/SaveButton'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
 import { PitchSurface } from '@/components/editor/PitchSurface'
@@ -147,9 +150,8 @@ const stateFromPositions = (play: Play, positions: Record<string, Pt>): SimState
     ]),
   )
 
-export function BuilderClient() {
+export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {}) {
   const [play, setPlay] = useState<Play | null>(null)
-  useEffect(() => setPlay({ ...createDefaultPlay(), title: builderTitle(new Date()) }), []) // crypto.randomUUID → client only
   // How many steps the last save stored; the game is "dirty" when there is more (or a queue).
   const [savedStepCount, setSavedStepCount] = useState(0)
 
@@ -180,6 +182,34 @@ export function BuilderClient() {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   useEffect(() => setDismissed(new Set()), [turn])
   useEffect(() => setScrubT(null), [queue, phase, historyIdx])
+
+  // A new game (crypto.randomUUID → client only), or a saved one rebuilt turn by turn.
+  useEffect(() => {
+    if (!initialPlay) {
+      setPlay({ ...createDefaultPlay(), title: builderTitle(new Date()) })
+      return
+    }
+    const nameOf = (id: string) => initialPlay.players.find((p) => p.id === id)?.label ?? id
+    const game = replayGame(initialPlay, nameOf)
+    if (!game) {
+      // An editor play: start a fresh game from its formation.
+      setPlay({ ...initialPlay, steps: initialPlay.steps.slice(0, 1) })
+      setToast({ text: 'Not a Turn Builder game — starting from its formation' })
+      return
+    }
+    setPlay(game.play)
+    setSavedStepCount(game.play.steps.length)
+    setHolder(game.holder)
+    setChain(game.chain)
+    setHistory(game.history)
+    setTurn(game.turn)
+    setScore(game.score)
+    setPhase('plan')
+    const turns = game.turn - 1
+    setToast({
+      text: game.skipped > 0 ? `Reopened ${turns} of ${turns + game.skipped} turns — the rest had no builder data` : `Reopened — ${turns} turn${turns === 1 ? '' : 's'} played, ${game.score} goal${game.score === 1 ? '' : 's'}`,
+    })
+  }, [initialPlay])
 
   const svgRef = useRef<SVGSVGElement>(null)
   const tlRef = useRef<HTMLDivElement>(null)
@@ -557,7 +587,10 @@ export function BuilderClient() {
     if (!play || !holder) return
     // The setup step records where the ball starts, so a saved game opens in the editor with the ball there.
     const h = basePositions[holder]
-    if (h) setPlay({ ...play, steps: [{ ...play.steps[0], ballPosition: { x: h[0], y: h[1] } }, ...play.steps.slice(1)] })
+    setPlay({
+      ...play,
+      steps: [{ ...play.steps[0], ...(h ? { ballPosition: { x: h[0], y: h[1] } } : {}), builder: { ...play.steps[0].builder, kickoffHolder: holder } }, ...play.steps.slice(1)],
+    })
     setHistory([
       {
         turn: 0,
@@ -615,10 +648,21 @@ export function BuilderClient() {
     }
     const plans = scheduleTurn(queue, basePositions, outcomes).plans
     plansRef.current = plans
-    pendingPlayRef.current = commit ? nextPlay : null
     const lastShot = plans.filter((p) => p.action.kind === 'shot').at(-1)
     const lost: { index: number; player: string } | null = lostBy
-    returnToRef.current = lost ? lost.player : lastShot ? lastShot.action.playerId : null
+    const returnTo = lost ? lost.player : lastShot ? lastShot.action.playerId : null
+    returnToRef.current = returnTo
+    const goal = detectGoal(tl.frames)
+    if (commit) {
+      // Builder bookkeeping on the step, so a saved game can be reopened here with its history.
+      const last = nextPlay.steps.length - 1
+      const step = {
+        ...nextPlay.steps[last],
+        builder: { actions: queue, outcomes, startHolder: holder, endHolder: returnTo ?? holderAfter(holder, queue), goal: !!goal },
+      }
+      nextPlay = { ...nextPlay, steps: [...nextPlay.steps.slice(0, last), step] }
+    }
+    pendingPlayRef.current = commit ? nextPlay : null
     plans.forEach((p, i) => {
       const who = labelOf(p.action.playerId)
       if (p.action.kind === 'shot' && outcomes.saved?.[i]) {
@@ -629,7 +673,6 @@ export function BuilderClient() {
         banners.push({ at: p.end + TACKLE_S, kind: 'lost', title: 'TACKLED', sub: `opp ${labelOf(outcomes.tackled[i].by)} wins it (${pct(risks[i]?.risk ?? 0)} risk) · ball back to ${who}` })
       }
     })
-    const goal = detectGoal(tl.frames)
     if (goal) banners.push({ at: goal.frameIndex * H, kind: 'goal', title: 'GOAL!', sub: commit ? `Turn ${turn} · tap to carry on` : 'Preview — not counted' })
     bannerQueueRef.current = banners.sort((a, b) => a.at - b.at)
     setGoalBanner(null)
