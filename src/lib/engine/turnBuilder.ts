@@ -249,15 +249,19 @@ export function scheduleTurn(actions: BuilderAction[], startPositions: Record<st
   return { plans, moves, passes, length, planned }
 }
 
-/** The queued turn as a simulator step, with the opponent's defensive AI on. */
-export function turnStep(actions: BuilderAction[], positions: Record<string, Pt>, index: number, outcomes: TurnOutcomes = {}): PlayStep {
+/**
+ * The queued turn as a simulator step, with the opponent's defensive AI on. `support` are the attacking
+ * AI's off-ball moves (engine/teamShape.ts) for the teammates the user did not command; they ride along
+ * as ordinary moves. The duration comes from the user's actions alone — the AI fits inside it.
+ */
+export function turnStep(actions: BuilderAction[], positions: Record<string, Pt>, index: number, outcomes: TurnOutcomes = {}, support: PlayerMove[] = []): PlayStep {
   const sched = scheduleTurn(actions, positions, outcomes)
   return {
     id: `turn-${index}`,
     index,
     title: `Turn ${index}`,
     duration: Math.max(MIN_TURN_S, sched.length + TURN_TAIL_S),
-    moves: sched.moves,
+    moves: [...sched.moves, ...support],
     passes: sched.passes,
     defenderRules: {},
     faceTargets: [],
