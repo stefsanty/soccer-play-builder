@@ -296,3 +296,21 @@ shot) plus the overlap case. The receiver-frozen decision (4.3 step 1) is checke
 - PR 2 — builder wiring: AI moves in the draft and resolved turns, dotted arrows, status count,
   ✓/× suggestion chips removed, pass-and-move automatic, before/after screenshots.
 - Tuning after a production check at phone size; choices listed on each PR.
+
+## 7. Review pass (2026-10-26, v0.42.1)
+
+A second session probed the shipped solver with the five single commands plus build-up from the
+back, a pass back from a high block and a second consecutive dribble, printing every teammate's
+move. Most scenarios read as good football (block lifts, angles, outlet, run beyond, overlap).
+Four did not; each is now a rule with a test in `teamShape.review.test.ts`.
+
+| # | What the probe showed | Rule now | Test |
+|---|---|---|---|
+| R1 | LM runs, the ball stays with RCM: the AI moved **RCM, the carrier,** 10 m back into a "support angle" (he had no action, so he was not frozen). | The turn-start holder is frozen like a commanded player. The next midfielder takes the angle. | R1 |
+| R2 | RCB dribbles 12 m / RCB passes LCB / GK passes RCB: the "run beyond" ended **behind** the forward's start (RST dropped 5–10 m), and the midfield dropped 9–10 m into the defence line. | The run beyond is skipped when the nearest forward already stands past its end (he is the depth; the shape lifts him). Any support / wide / overlap / depth job drops a player at most `MAX_JOB_DROP` = 5 m (not in a shot turn). | R2, R3 |
+| R3 | Deep carrier: the support angle for LCB at (25, 18) was at depth 13, inside the back line. | With the drop cap the angle sits beside and slightly ahead (16, 29): a midfielder showing for the ball. | R3 |
+| R4 | A pass back from a high block (ball 70 → 48): **all five** forwards and midfielders dropped 11 m. | Forwards drop at most `FWD_BACK_MAX` = 3 m in a 'back' turn; the midfield keeps `BACK_HOLD` (half the retreat); the defence holds. | R4 |
+
+Unchanged on purpose (choices for Stefan): no support cast in a 'back' turn (a short safe option
+beside a retreating carrier, as FIFA shows, would be one more job); the second-last opponent is
+read at the turn start; the keeper never moves.
