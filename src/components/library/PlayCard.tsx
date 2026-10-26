@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import type { Play } from '@/lib/types/play'
 import { PITCH_W, PITCH_H } from '@/lib/engine/pitch'
+import { isBuilderGame } from '@/lib/engine/builderReplay'
 
 interface PlayCardProps {
   play: Play
@@ -60,15 +61,21 @@ export function stepSummary(play: Play): string {
 }
 
 export function PlayCard({ play }: PlayCardProps) {
+  // A game saved from the Turn Builder reopens there, with its turns; other plays open in the editor.
+  const builderGame = isBuilderGame(play)
   return (
     <Link
-      href={`/editor/${play.id}`}
+      href={builderGame ? `/builder/${play.id}` : `/editor/${play.id}`}
+      data-testid={builderGame ? 'play-card-builder' : 'play-card'}
       className="flex touch-manipulation items-center gap-3.5 rounded-[14px] bg-[var(--app-card)] p-3 text-[#e8edf2] no-underline transition-all duration-100 hover:bg-[#1a222b] active:scale-[0.98] active:bg-[#202a35]"
     >
       <PitchThumb play={play} />
       <div className="flex min-w-0 flex-col gap-1">
         <div className="truncate text-base font-semibold">{play.title}</div>
-        <div className="text-[13px] text-[var(--app-muted)]">{stepSummary(play)}</div>
+        <div className="flex items-center gap-2 text-[13px] text-[var(--app-muted)]">
+          {builderGame && <span className="rounded bg-[var(--app-chip)] px-1.5 py-0.5 text-[11px] font-semibold text-[#e8edf2]">Turn Builder</span>}
+          {stepSummary(play)}
+        </div>
         <div className="text-xs text-[var(--app-muted)]">{relativeEdited(play.updatedAt || play.createdAt)}</div>
       </div>
     </Link>
