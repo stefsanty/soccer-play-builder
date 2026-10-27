@@ -30,9 +30,8 @@
  * under our team and the holder on top.
  * The game is a Play (setup + one step per turn): the header's Save stores it through the editor's
  * save path, and leaving with unsaved turns asks first (back arrow confirm + beforeunload).
- * Win condition (engine/builderGame.ts): score within TURN_LIMIT turns. The counter reads "Turn 3/6";
- * a goal in time shows a win card (play on, or new game); no goal after the last turn shows an
- * "out of turns" card (rewind and replan, or new game).
+ * There is no turn limit (Stefan, 2026-10-27): the counter reads "Turn N", and a goal shows the GOAL!
+ * banner and adds to the score chip while play carries on.
  * A game saved from here carries builder bookkeeping on each step; /builder/[id] reopens it and the
  * history, score and holder are rebuilt by re-simulating the steps (engine/builderReplay.ts).
  * @props { initialPlay?: Play } — a saved game to reopen; omitted = a new game
@@ -41,7 +40,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, CircleDot, Eye, Play as PlayIcon, SkipBack, SkipForward, Square, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Check, CircleDot, Eye, Minus, Play as PlayIcon, Plus, SkipBack, SkipForward, Square, Trash2, X } from 'lucide-react'
 import type { Play } from '@/lib/types/play'
 import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
@@ -54,7 +53,6 @@ import { drawOrder } from '@/lib/engine/builderHints'
 import { planTeamShape, supportMovesToPlayerMoves, type SupportMove } from '@/lib/engine/teamShape'
 import { builderTitle, hasUnsavedWork } from '@/lib/engine/builderSave'
 import { replayGame } from '@/lib/engine/builderReplay'
-import { TURN_LIMIT, gameOutcome, turnCounterLabel, turnsLeft } from '@/lib/engine/builderGame'
 import { SaveButton } from '@/components/editor/SaveButton'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
 import { PitchSurface } from '@/components/editor/PitchSurface'
@@ -63,9 +61,12 @@ import {
   actionLabel,
   allowedKinds,
   buildSnapshots,
+  capToRange,
+  editableKinds,
   holderAfter,
   queueAction,
   removeAction,
+  replaceAction,
   retimeAction,
   scheduleTurn,
   shortLabel,
@@ -95,8 +96,13 @@ const BLOCK_COLORS: Record<string, string> = {
   shot: 'rgba(255,120,120,0.95)',
 }
 const SHOT_ARROW = 'rgba(255,140,140,0.95)'
-/** A pitch tap this close to a queued run / dribble end selects that player again. */
-const CHAIN_TAP_M = 3
+/** A queued action's end ring (run / dribble / shot) or pass midpoint grabs within this radius: tap to
+ *  edit the action, drag to move its end. */
+const GRAB_M = 3
+/** Edit bar: ± this much on the action's start time. */
+const NUDGE_S = 0.5
+const EDIT = '#4cc9f0'
+const KIND_NAME: Record<ActionKind, string> = { pass: 'Pass', dribble: 'Dribble', shot: 'Shoot', run: 'Run' }
 /**
  * Bottom panel rows have FIXED heights, so the pitch above never resizes while you plan — a queue
  * chip or the timeline appearing used to shrink the pitch and move every player under your thumb.
@@ -179,8 +185,6 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const [confirmClear, setConfirmClear] = useState(false)
   // Goals scored so far (header chip) and the GOAL! / SAVED banner, shown the moment it happens in playback.
   const [score, setScore] = useState(0)
-  // The end card (won / out of turns) shows once per outcome; "Play on" closes it, a replan re-arms it.
-  const [endCardClosed, setEndCardClosed] = useState(false)
   const [goalBanner, setGoalBanner] = useState<{ kind: BannerKind; title: string; sub: string; preview: boolean } | null>(null)
   const [timeline, setTimeline] = useState<StepTimeline | null>(null)
   const [progress, setProgress] = useState(0)
@@ -189,6 +193,18 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   // A block being dragged to a new start time: visual position until the pointer lifts.
   const [blockDrag, setBlockDrag] = useState<{ index: number; start: number } | null>(null)
   useEffect(() => setScrubT(null), [queue, phase, historyIdx])
+  // The queued action being edited (tap its chip, end ring or timeline block): drag its end, change
+  // its type, nudge its start or delete it. `pickTarget` = waiting for a teammate tap to pass to.
+  const [editing, setEditing] = useState<number | null>(null)
+  const [pickTarget, setPickTarget] = useState(false)
+  useEffect(() => {
+    setEditing(null)
+    setPickTarget(false)
+  }, [phase, historyIdx])
+  useEffect(() => {
+    if (editing !== null && editing >= queue.length) setEditing(null)
+  }, [editing, queue.length])
+  useEffect(() => setPickTarget(false), [editing])
 
   // A new game (crypto.randomUUID → client only), or a saved one rebuilt turn by turn.
   useEffect(() => {
@@ -239,18 +255,12 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const returnToRef = useRef<string | null>(null)
 
   const running = phase === 'playing' || phase === 'preview'
-  const turnsPlayed = turn - 1
-  const outcome = gameOutcome(turnsPlayed, score)
   const dirty = !!play && hasUnsavedWork({ stepCount: play.steps.length, queued: queue.length, savedStepCount })
 
   // Leaving with unsaved turns: the browser's own prompt on reload / close…
-  const leaveConfirmedRef = useRef(false)
   useEffect(() => {
     if (!dirty) return
-    const warn = (e: BeforeUnloadEvent) => {
-      if (leaveConfirmedRef.current) return
-      e.preventDefault()
-    }
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [dirty])
@@ -258,12 +268,6 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const confirmLeave = (e: React.MouseEvent) => {
     if (!dirty) return
     if (!window.confirm('Leave the Turn Builder? This game is not saved and will be lost.')) e.preventDefault()
-  }
-  /** The end card's "New game": a full reload of /builder (a Link to the same route would not reset the game). */
-  const newGame = () => {
-    if (dirty && !window.confirm('Start a new game? This game is not saved and will be lost.')) return
-    leaveConfirmedRef.current = true
-    window.location.assign('/builder')
   }
 
   useEffect(() => {
@@ -278,20 +282,38 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   }, [confirmClear])
   useEffect(() => setConfirmClear(false), [queue, phase])
 
-  /** Remove one chip; if other actions depended on it they go too, and the toast says so with Undo. */
-  const removeChip = (i: number) => {
-    const before = queue
-    const { queue: next, dropped } = removeAction(queue, i, holder)
-    setQueue(next)
-    if (dropped.length === 0) return
-    const n = dropped.length
+  /** Offer Undo back to `before` in the toast. */
+  const undoToast = (text: string, before: BuilderAction[]) =>
     setToast({
-      text: `Removed ${shortLabel(before[i], labelOf)} and ${n} action${n === 1 ? '' : 's'} that needed it`,
+      text,
       undo: () => {
         setQueue(before)
         setToast(null)
       },
     })
+  const needed = (n: number) => `${n} action${n === 1 ? '' : 's'} that needed it`
+
+  /** Remove one chip; if other actions depended on it they go too. The toast offers Undo either way. */
+  const removeChip = (i: number) => {
+    const before = queue
+    const { queue: next, dropped } = removeAction(queue, i, holder)
+    setQueue(next)
+    setEditing(null)
+    undoToast(dropped.length === 0 ? `Removed ${shortLabel(before[i], labelOf)}` : `Removed ${shortLabel(before[i], labelOf)} and ${needed(dropped.length)}`, before)
+  }
+
+  /** Swap the chip at `i` for an edited version; dependents that no longer make sense go, with Undo. */
+  const editChip = (i: number, action: BuilderAction) => {
+    const before = queue
+    const { queue: next, dropped } = replaceAction(queue, i, action, holder)
+    setQueue(next)
+    setEditing(next.includes(action) ? next.indexOf(action) : null)
+    if (dropped.length > 0) undoToast(`Changed ${shortLabel(before[i], labelOf)} — removed ${needed(dropped.length)}`, before)
+  }
+  const startEdit = (i: number) => {
+    setSelected(null)
+    setScrubT(null)
+    setEditing(i)
   }
 
   // The banner lingers until tapped, or a few seconds after the turn finishes playing.
@@ -312,8 +334,6 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
 
   const inHistory = historyIdx !== null
   const viewSnapshot = inHistory ? history[historyIdx] : null
-  // …after the GOAL! banner has gone, so the two never stack.
-  const showEndCard = phase === 'plan' && !inHistory && !running && !goalBanner && outcome !== 'playing' && !endCardClosed
 
   // The queued chain laid out in time: ghost arrows come from its plans and the range disc / gating
   // from its planned (post-move) positions, so a second queued run departs from the first one's target.
@@ -322,6 +342,9 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   // Who will hold the ball once the queue so far has run — gating follows this through the chain.
   const projectedHolder = holderAfter(holder, queue)
   const tlDuration = schedule ? turnSeconds(schedule) : 0
+  // The edited action as scheduled (where it departs from, where it ends, when).
+  const editAction = editing !== null ? queue[editing] : undefined
+  const editPlan = editAction ? schedule?.plans.find((p) => p.action === editAction) : undefined
 
   // Attacking AI (engine/teamShape.ts): where the teammates the user did not command go while the
   // queued turn plays. Pure and deterministic, so the arrows, Preview, Play and a reopened game agree.
@@ -533,6 +556,25 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       setHolder(id)
       return
     }
+    if (editing !== null) {
+      // Editing a pass (or turning an action into one): the tapped teammate becomes its receiver.
+      const a = queue[editing]
+      const plan = editPlan
+      if (a && plan && (pickTarget || a.kind === 'pass') && id !== a.playerId) {
+        const pass: BuilderAction = { kind: 'pass', playerId: a.playerId, to: id, ...(a.delay !== undefined && { delay: a.delay }) }
+        if (!actionInRange(pass, { ...planned, [a.playerId]: plan.from })) {
+          setFlash(`Too far — a pass can travel up to ${PASS_RANGE_M}m`)
+          return
+        }
+        editChip(editing, pass)
+        setPickTarget(false)
+        return
+      }
+      // anyone else: stop editing and select him as usual
+      setEditing(null)
+      setSelected(id === selected ? null : id)
+      return
+    }
     if (!selected) {
       setSelected(id)
       return
@@ -562,16 +604,15 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       setScrubT(null)
       return
     }
-    const m = toMeters(e)
-    if (!m) return
-    if (!selected) {
-      // Tapping the end ring of a queued run / dribble picks that player up again, to chain from there.
-      const end = schedule?.plans
-        .filter((p) => (p.action.kind === 'run' || p.action.kind === 'dribble') && Math.hypot(p.to[0] - m[0], p.to[1] - m[1]) <= CHAIN_TAP_M)
-        .at(-1)
-      if (end) setSelected(end.action.playerId)
+    // An end-ring drag just finished: its click must not also queue an action.
+    if (performance.now() - grabClickRef.current < 500) return
+    // While editing, a tap on open pitch just closes the editor.
+    if (editing !== null) {
+      setEditing(null)
       return
     }
+    const m = toMeters(e)
+    if (!m || !selected) return
     // A projected holder with the ball already at their chain time dribbles; otherwise they run,
     // concurrent with the incoming pass flight (the simulator's pass homes onto the live receiver).
     const canDribble = allowedKinds(selected, projectedHolder).includes('dribble')
@@ -597,16 +638,93 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       setFlash(`Too far to shoot (max ${SHOT_RANGE_M}m) — ${labelOf(selected)} dribbles closer`)
     }
     // A tap beyond the highlighted range becomes a maximum-distance move toward that spot.
-    let to: Pt = m
-    const d = Math.hypot(m[0] - from[0], m[1] - from[1])
-    if (d > RUN_RANGE_M) {
-      to = [from[0] + ((m[0] - from[0]) * RUN_RANGE_M) / d, from[1] + ((m[1] - from[1]) * RUN_RANGE_M) / d]
+    const to = capToRange(from, m, RUN_RANGE_M)
+    if (to !== m) {
       setFlash(`Max range — ${labelOf(selected)} ${kind === 'dribble' ? 'dribbles' : 'runs'} ${Math.round(RUN_RANGE_M)}m toward it`)
     }
     setQueue((q) => queueAction(q, { kind, playerId: selected, toX: to[0], toY: to[1] }))
     // A dribbler stays selected: the next tap on a teammate passes from the dribble's end, the goal
     // mouth shoots from there (dribble → pass / dribble → shot in one turn).
     setSelected(kind === 'dribble' ? selected : null)
+  }
+
+  // ---- editing a queued action: grab its end ring (tap = edit, drag = move the end) ----
+  const grabRef = useRef<{ index: number; pointerId: number; x: number; y: number; moved: boolean } | null>(null)
+  const grabClickRef = useRef(0) // when the last grab ended (performance.now)
+  /** Where action `a` ends if its end is dragged to `m`: runs / dribbles capped to the run range, a
+   *  shot slides along the goal mouth. */
+  const draggedEnd = (a: BuilderAction, from: Pt, m: Pt): BuilderAction | null => {
+    if (a.kind === 'run' || a.kind === 'dribble') {
+      const to = capToRange(from, m, RUN_RANGE_M)
+      return { ...a, toX: to[0], toY: to[1] }
+    }
+    if (a.kind === 'shot') {
+      const to = shotTarget(m[0])
+      return { ...a, toX: to[0], toY: to[1] }
+    }
+    return null
+  }
+  const onGrabDown = (e: React.PointerEvent, index: number) => {
+    e.stopPropagation()
+    try {
+      ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+    } catch {
+      // capture can fail for exotic pointers; the drag still works per-event
+    }
+    grabRef.current = { index, pointerId: e.pointerId, x: e.clientX, y: e.clientY, moved: false }
+  }
+  const onGrabMove = (e: React.PointerEvent) => {
+    const g = grabRef.current
+    if (!g || e.pointerId !== g.pointerId) return
+    if (!g.moved && Math.hypot(e.clientX - g.x, e.clientY - g.y) < 6) return
+    const a = queue[g.index]
+    const plan = schedule?.plans.find((p) => p.action === a)
+    const m = toMeters(e)
+    if (!a || !plan || !m) return
+    const next = draggedEnd(a, plan.from, m)
+    if (!next) return
+    if (!g.moved) {
+      g.moved = true
+      setSelected(null)
+      setEditing(g.index)
+    }
+    // An end move never changes who has the ball, so nothing downstream can fall away.
+    setQueue((q) => q.map((x, j) => (j === g.index ? next : x)))
+  }
+  const onGrabUp = (e: React.PointerEvent) => {
+    const g = grabRef.current
+    if (!g || e.pointerId !== g.pointerId) return
+    grabRef.current = null
+    grabClickRef.current = performance.now()
+    if (!g.moved) startEdit(g.index)
+  }
+
+  /** The edit bar's type buttons. A pass needs a receiver, so it waits for a teammate tap. */
+  const changeKind = (kind: ActionKind) => {
+    if (editing === null || !editAction || !editPlan || kind === editAction.kind) return
+    const { playerId } = editAction
+    const keep = editAction.delay !== undefined ? { delay: editAction.delay } : {}
+    if (kind === 'pass') {
+      setPickTarget(true)
+      return
+    }
+    if (kind === 'shot') {
+      const target = shotTarget(editAction.kind === 'pass' ? GOAL_CENTRE_X : editPlan.to[0])
+      if (Math.hypot(target[0] - editPlan.from[0], target[1] - editPlan.from[1]) > SHOT_RANGE_M) {
+        setFlash(`Too far to shoot (max ${SHOT_RANGE_M}m)`)
+        return
+      }
+      editChip(editing, { kind: 'shot', playerId, toX: target[0], toY: target[1], ...keep })
+      return
+    }
+    // → dribble: toward where the pass / shot was going, within the run range and short of the goal line
+    const aim: Pt = [editPlan.to[0], Math.min(editPlan.to[1], GOAL_LINE_Y - 2)]
+    const to = capToRange(editPlan.from, aim, RUN_RANGE_M)
+    editChip(editing, { kind: 'dribble', playerId, toX: to[0], toY: to[1], ...keep })
+  }
+  const nudge = (ds: number) => {
+    if (editing === null || !editPlan) return
+    setQueue((q) => retimeAction(q, editing, Math.max(0, editPlan.start + ds)))
   }
 
   const startGame = () => {
@@ -748,7 +866,6 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     setHistoryIdx(null)
     setQueue([])
     setSelected(null)
-    setEndCardClosed(false)
     setFlash(`Replanning from ${snap.turn === 0 ? 'kick-off' : `turn ${snap.turn}`} — later turns discarded`)
   }
 
@@ -771,7 +888,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     if (!draft || !e.currentTarget.hasPointerCapture(e.pointerId)) return
     setScrubT(tlTimeAt(e.clientX))
   }
-  const blockDragRef = useRef<{ index: number; pointerId: number; grabOffset: number; durS: number } | null>(null)
+  const blockDragRef = useRef<{ index: number; pointerId: number; grabOffset: number; durS: number; x: number; moved: boolean } | null>(null)
   const onBlockPointerDown = (e: React.PointerEvent, index: number, plan: ActionPlan) => {
     e.stopPropagation()
     try {
@@ -779,13 +896,15 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     } catch {
       // capture can fail for exotic pointers; dragging still works per-event
     }
-    blockDragRef.current = { index, pointerId: e.pointerId, grabOffset: tlTimeAt(e.clientX) * tlDuration - plan.start, durS: plan.end - plan.start }
+    blockDragRef.current = { index, pointerId: e.pointerId, grabOffset: tlTimeAt(e.clientX) * tlDuration - plan.start, durS: plan.end - plan.start, x: e.clientX, moved: false }
     setBlockDrag({ index, start: plan.start })
   }
   const onBlockPointerMove = (e: React.PointerEvent) => {
     const d = blockDragRef.current
     if (!d || e.pointerId !== d.pointerId) return
     e.stopPropagation()
+    if (!d.moved && Math.abs(e.clientX - d.x) < 4) return
+    d.moved = true
     const start = clamp(tlTimeAt(e.clientX) * tlDuration - d.grabOffset, 0, Math.max(0, tlDuration - d.durS))
     setBlockDrag({ index: d.index, start })
   }
@@ -794,6 +913,12 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     if (!d || e.pointerId !== d.pointerId) return
     e.stopPropagation()
     blockDragRef.current = null
+    // a tap (no drag) on a block opens that action in the editor
+    if (!d.moved) {
+      setBlockDrag(null)
+      startEdit(d.index)
+      return
+    }
     setBlockDrag((bd) => {
       if (bd) setQueue((q) => retimeAction(q, bd.index, bd.start))
       return null
@@ -808,7 +933,6 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       ? schedule.plans.filter((p) => scrubSeconds >= p.start && scrubSeconds <= p.end).map((p) => actionLabel(p.action, labelOf))
       : []
 
-  const withYou = support.length > 0 ? ` · ${support.length} move with the plan` : ''
   const status =
     phase === 'setup'
       ? holder
@@ -824,6 +948,10 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
             ? 'Previewing — nothing is committed'
             : scrubSeconds !== null
               ? `${scrubSeconds.toFixed(1)}s — ${activeNow.length ? activeNow.join(' · ') : 'ball settles'}`
+              : editAction
+                ? pickTarget || editAction.kind === 'pass'
+                  ? `Editing ${actionLabel(editAction, labelOf)} — tap a teammate to pass to him instead`
+                  : `Editing ${actionLabel(editAction, labelOf)} — drag the blue ring to move the end, or change it below`
               : selected
                 ? allowedKinds(selected, projectedHolder).includes('pass')
                   ? selected === holder && queue.some((a) => a.playerId === selected && a.kind === 'dribble')
@@ -832,9 +960,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                     ? `${labelOf(selected)} will have the ball — tap a teammate to pass, or the pitch to run and meet it`
                     : `${labelOf(selected)} has the ball — tap a teammate to pass, the pitch to dribble, or the goal to shoot`
                   : `${labelOf(selected)} — tap the pitch to queue a run (beyond the area = max-distance run)`
-                : outcome === 'playing' && turnsLeft(turnsPlayed) === 1
-                  ? `Last turn — score now, or rewind and replan${withYou}`
-                  : support.length > 0
+                : support.length > 0
                     ? `${support.length} teammate${support.length === 1 ? '' : 's'} move with the plan (dotted) — tap one to command him instead`
                     : 'Tap a blue player to select; actions chain in queue order'
 
@@ -859,7 +985,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
             </div>
           )}
           <div data-testid="turn-counter" className="rounded-full border border-white/10 bg-[var(--app-card)] px-3 py-1 text-sm font-semibold">
-            {phase === 'setup' ? 'Setup' : inHistory && viewSnapshot ? `Turn ${viewSnapshot.turn}` : turnCounterLabel(turn, outcome)}
+            {phase === 'setup' ? 'Setup' : inHistory && viewSnapshot ? `Turn ${viewSnapshot.turn}` : `Turn ${turn}`}
           </div>
           {/* Save the game as a play (the editor's own save path): setup + one step per resolved turn */}
           {phase !== 'setup' && (
@@ -984,11 +1110,12 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
               const ux = (t.x - f.x) / d
               const uy = (t.y - f.y) / d
               const isShot = action.kind === 'shot'
-              const stroke = isShot ? SHOT_ARROW : GHOST
+              const isEdit = editAction === action
+              const stroke = isEdit ? EDIT : isShot ? SHOT_ARROW : GHOST
               const chance = shotChances[i]
               return (
-                <g key={`${action.playerId}-${i}`} pointerEvents="none">
-                  <line x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke={stroke} strokeWidth={isShot ? 4 : 3} strokeDasharray={isShot ? undefined : action.kind === 'pass' ? '4 8' : '12 8'} />
+                <g key={`${action.playerId}-${i}`} pointerEvents="none" data-testid={`arrow-${i}`} data-editing={isEdit || undefined}>
+                  <line x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke={stroke} strokeWidth={isShot || isEdit ? 4 : 3} strokeDasharray={isShot ? undefined : action.kind === 'pass' ? '4 8' : '12 8'} />
                   <polyline
                     points={`${t.x - ux * 18 - uy * 9},${t.y - uy * 18 + ux * 9} ${t.x},${t.y} ${t.x - ux * 18 + uy * 9},${t.y - uy * 18 - ux * 9}`}
                     fill="none"
@@ -996,7 +1123,9 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                     strokeWidth={3}
                     strokeLinejoin="round"
                   />
-                  {action.kind === 'run' || action.kind === 'dribble' ? <circle cx={t.x} cy={t.y} r={16} fill="none" stroke={GHOST} strokeWidth={2.5} strokeDasharray="5 4" /> : null}
+                  {action.kind !== 'pass' && (isEdit || action.kind !== 'shot') ? (
+                    <circle cx={t.x} cy={t.y} r={isEdit ? 20 : 16} fill={isEdit ? 'rgba(76,201,240,0.2)' : 'none'} stroke={stroke} strokeWidth={isEdit ? 3.5 : 2.5} strokeDasharray="5 4" />
+                  ) : null}
                   {isShot && chance !== undefined && (
                     <g data-testid={`shot-chance-${i}`}>
                       <rect x={(f.x + t.x) / 2 - 46} y={(f.y + t.y) / 2 - 13} width={92} height={26} rx={13} fill={chanceColor(chance)} />
@@ -1014,6 +1143,33 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                     </g>
                   )}
                 </g>
+              )
+            })}
+
+          {/* grab handles: a queued action's end ring (pass: its midpoint) — tap to edit, drag to move the end.
+              Under the players, so a tap on a disc still selects / passes. */}
+          {!frame &&
+            !inHistory &&
+            phase === 'plan' &&
+            schedule?.plans.map(({ action, from, to }) => {
+              const qi = queue.indexOf(action)
+              if (qi < 0) return null
+              const at = action.kind === 'pass' ? pt((from[0] + to[0]) / 2, (from[1] + to[1]) / 2) : pt(to[0], to[1])
+              return (
+                <circle
+                  key={`grab-${qi}`}
+                  data-testid={`grab-${qi}`}
+                  cx={at.x}
+                  cy={at.y}
+                  r={GRAB_M * 10}
+                  fill="transparent"
+                  style={{ cursor: action.kind === 'pass' ? 'pointer' : 'grab', touchAction: 'none' }}
+                  onPointerDown={(e) => onGrabDown(e, qi)}
+                  onPointerMove={onGrabMove}
+                  onPointerUp={onGrabUp}
+                  onPointerCancel={() => (grabRef.current = null)}
+                  onClick={(e) => e.stopPropagation()}
+                />
               )
             })}
 
@@ -1048,6 +1204,9 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                 transform={`translate(${c.x}, ${c.y})`}
                 opacity={outOfPassRange ? 0.45 : 1}
                 data-out-of-range={outOfPassRange || undefined}
+                // a disc you can't tap (defenders, or anyone mid-playback) lets the tap through to an
+                // end ring under it — a run often ends right on the man marking him
+                pointerEvents={tappable ? undefined : 'none'}
                 onClick={(e) => {
                   if (!tappable) return
                   e.stopPropagation()
@@ -1111,57 +1270,60 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
             </div>
           </div>
         )}
-        {showEndCard && (
-          <div
-            data-testid="end-card"
-            data-outcome={outcome}
-            role="dialog"
-            aria-label={outcome === 'won' ? 'You scored' : 'Out of turns'}
-            className="absolute inset-0 flex items-center justify-center bg-[rgba(11,16,21,0.55)] p-6 backdrop-blur-[2px]"
-          >
-            <div className="w-full max-w-[300px] rounded-2xl border border-white/10 bg-[var(--app-card)] p-5 text-center shadow-2xl">
-              <div className={`text-3xl font-black tracking-tight ${outcome === 'won' ? 'text-[#ffd43b]' : 'text-[#ff8a8a]'}`}>
-                {outcome === 'won' ? 'YOU SCORED' : 'OUT OF TURNS'}
-              </div>
-              <div className="mt-1.5 text-sm text-[var(--app-muted)]">
-                {outcome === 'won'
-                  ? `Goal in turn ${turnsPlayed} of ${TURN_LIMIT}. Play on, or start a new game.`
-                  : `No goal in ${TURN_LIMIT} turns. Rewind to any action and replan from there, or start again.`}
-              </div>
-              <div className="mt-4 flex flex-col gap-2">
-                {outcome === 'won' ? (
+        {/* edit bar: the tapped queued action — change its type, nudge its start, delete it */}
+        {editAction && editPlan && editing !== null && phase === 'plan' && !inHistory && (
+          <div className="absolute inset-x-2 bottom-2 rounded-2xl border border-[#4cc9f0]/50 bg-[rgba(11,16,21,0.94)] p-1.5 shadow-2xl backdrop-blur" data-testid="edit-bar">
+            <div className="flex h-8 items-center gap-1">
+              <span className="min-w-0 flex-1 truncate pl-1.5 text-xs font-bold text-[#4cc9f0]">
+                {editing + 1} · {shortLabel(editAction, labelOf)}
+              </span>
+              <button onClick={() => nudge(-NUDGE_S)} aria-label="Start earlier" data-testid="edit-earlier" className="flex size-8 touch-manipulation items-center justify-center rounded-lg border border-[var(--app-line)] text-[var(--app-muted)] active:scale-95">
+                <Minus className="size-4" />
+              </button>
+              <span className="w-12 text-center text-[11px] font-semibold tabular-nums text-[#e8edf2]" data-testid="edit-start">
+                {editPlan.start.toFixed(1)}s
+              </span>
+              <button onClick={() => nudge(NUDGE_S)} aria-label="Start later" data-testid="edit-later" className="flex size-8 touch-manipulation items-center justify-center rounded-lg border border-[var(--app-line)] text-[var(--app-muted)] active:scale-95">
+                <Plus className="size-4" />
+              </button>
+              <button onClick={() => removeChip(editing)} aria-label="Delete this action" data-testid="edit-delete" className="flex size-8 touch-manipulation items-center justify-center rounded-lg border border-red-400/50 text-red-300 active:scale-95">
+                <Trash2 className="size-4" />
+              </button>
+              <button onClick={() => setEditing(null)} aria-label="Done editing" data-testid="edit-done" className="flex size-8 touch-manipulation items-center justify-center rounded-lg bg-[#4cc9f0] text-[#0b1015] active:scale-95">
+                <Check className="size-4" />
+              </button>
+            </div>
+            <div className="mt-1 flex h-8 items-center gap-1">
+              {editableKinds(queue, editing, holder).map((k) => {
+                const on = pickTarget ? k === 'pass' : editAction.kind === k
+                return (
                   <button
-                    onClick={() => setEndCardClosed(true)}
-                    data-testid="end-play-on"
-                    className="h-12 touch-manipulation rounded-[14px] bg-[var(--app-accent)] text-base font-bold text-[var(--app-accent-ink)] active:scale-[0.97]"
+                    key={k}
+                    onClick={() => changeKind(k)}
+                    data-testid={`edit-kind-${k}`}
+                    data-on={on || undefined}
+                    className={`h-8 flex-1 touch-manipulation rounded-lg text-xs font-bold active:scale-95 ${on ? 'bg-[#4cc9f0] text-[#0b1015]' : 'border border-[var(--app-line)] text-[#e8edf2]'}`}
                   >
-                    Play on
+                    {KIND_NAME[k]}
                   </button>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setEndCardClosed(true)
-                      rewind()
-                    }}
-                    data-testid="end-rewind"
-                    className="h-12 touch-manipulation rounded-[14px] bg-[var(--app-accent)] text-base font-bold text-[var(--app-accent-ink)] active:scale-[0.97]"
-                  >
-                    Rewind and replan
-                  </button>
-                )}
-                <button
-                  onClick={newGame}
-                  data-testid="end-new-game"
-                  className="h-12 touch-manipulation rounded-[14px] border border-[var(--app-line)] bg-[var(--app-bg)] text-base font-semibold text-[#e8edf2] active:scale-[0.97]"
-                >
-                  New game
-                </button>
-              </div>
+                )
+              })}
+              {editAction.kind === 'run' && <span className="flex-[2] px-1 text-[10px] leading-tight text-[var(--app-muted)]">No ball here — he can only run</span>}
+              <button
+                onClick={() => {
+                  setEditing(null)
+                  setSelected(editAction.playerId)
+                }}
+                data-testid="edit-next"
+                className="h-8 flex-1 touch-manipulation rounded-lg border border-[var(--app-line)] text-xs font-semibold text-[var(--app-muted)] active:scale-95"
+              >
+                Then…
+              </button>
             </div>
           </div>
         )}
         {toast && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center" data-testid="toast">
+          <div className={`pointer-events-none absolute inset-x-0 flex justify-center ${editAction ? 'bottom-[92px]' : 'bottom-3'}`} data-testid="toast">
             <div className="flex items-center gap-3 rounded-full bg-[rgba(11,16,21,0.92)] py-1.5 pl-4 pr-1.5 text-xs font-semibold text-[#ffd43b] shadow-lg backdrop-blur">
               {toast.text}
               {toast.undo ? (
@@ -1234,21 +1396,33 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                   <span
                     key={`${a.playerId}-${i}`}
                     data-testid={`queue-chip-${i}`}
-                    className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-[var(--app-line)] bg-[var(--app-chip)] pl-1.5 pr-0.5 text-[11px] font-semibold leading-none"
+                    data-editing={editing === i || undefined}
+                    className={`flex h-6 shrink-0 items-center gap-1 rounded-md border pr-0.5 text-[11px] font-semibold leading-none ${
+                      editing === i ? 'border-[#4cc9f0] bg-[#4cc9f0]/20' : 'border-[var(--app-line)] bg-[var(--app-chip)]'
+                    }`}
                   >
-                    <span className="text-[9px] text-[var(--app-muted)]">{i + 1}</span>
-                    {a.kind !== 'run' && <CircleDot className="size-3 text-[#ffd43b]" aria-hidden />}
-                    {shortLabel(a, labelOf)}
-                    {a.kind === 'shot' && shotChances[i] !== undefined && (
-                      <span className="rounded px-1 text-[9px] text-white" style={{ background: chanceColor(shotChances[i]) }}>
-                        {pct(shotChances[i])}
-                      </span>
-                    )}
-                    {risks[i] && (
-                      <span className="rounded px-1 text-[9px] text-white" style={{ background: riskColor(risks[i].risk) }}>
-                        {pct(risks[i].risk)}
-                      </span>
-                    )}
+                    {/* tap the chip to edit that action */}
+                    <button
+                      onClick={() => (editing === i ? setEditing(null) : startEdit(i))}
+                      disabled={phase !== 'plan'}
+                      aria-label={`Edit ${actionLabel(a, labelOf)}`}
+                      data-testid={`chip-edit-${i}`}
+                      className="flex h-full touch-manipulation items-center gap-1 pl-1.5"
+                    >
+                      <span className="text-[9px] text-[var(--app-muted)]">{i + 1}</span>
+                      {a.kind !== 'run' && <CircleDot className="size-3 text-[#ffd43b]" aria-hidden />}
+                      {shortLabel(a, labelOf)}
+                      {a.kind === 'shot' && shotChances[i] !== undefined && (
+                        <span className="rounded px-1 text-[9px] text-white" style={{ background: chanceColor(shotChances[i]) }}>
+                          {pct(shotChances[i])}
+                        </span>
+                      )}
+                      {risks[i] && (
+                        <span className="rounded px-1 text-[9px] text-white" style={{ background: riskColor(risks[i].risk) }}>
+                          {pct(risks[i].risk)}
+                        </span>
+                      )}
+                    </button>
                     <button
                       onClick={() => removeChip(i)}
                       aria-label={`Remove ${actionLabel(a, labelOf)}`}
@@ -1295,7 +1469,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                         left: `${(start / tlDuration) * 100}%`,
                         width: `${w}%`,
                         background: BLOCK_COLORS[plan.action.kind],
-                        outline: active ? '2px solid #ffd43b' : blockDrag?.index === i ? '2px solid #4cc9f0' : 'none',
+                        outline: active ? '2px solid #ffd43b' : blockDrag?.index === i || queue[editing ?? -1] === plan.action ? `2px solid ${EDIT}` : 'none',
                       }}
                       onPointerDown={(e) => onBlockPointerDown(e, i, plan)}
                       onPointerMove={onBlockPointerMove}
