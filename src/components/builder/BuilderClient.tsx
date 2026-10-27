@@ -964,6 +964,8 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                     ? `${support.length} teammate${support.length === 1 ? '' : 's'} move with the plan (dotted) — tap one to command him instead`
                     : 'Tap a blue player to select; actions chain in queue order'
 
+  const compactControls = history.length > 1
+
   // timeline lanes: one row per player that has actions, in order of first appearance
   const lanes: string[] = []
   if (schedule) for (const p of schedule.plans) if (!lanes.includes(p.action.playerId)) lanes.push(p.action.playerId)
@@ -1492,15 +1494,16 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
             </div>
 
             <div className="flex items-center gap-2">
-              {/* rewind controls, bottom-left; appear once there is history to walk */}
-              {history.length > 1 && (
-                <div className="flex items-center gap-1">
+              {/* rewind controls, bottom-left; appear once there is history to walk. With them the row is
+                  full at 375 px, so they are 40 px wide and Preview is icon-only — the trash stays on screen. */}
+              {compactControls && (
+                <div className="flex shrink-0 items-center gap-1">
                   <button
                     onClick={rewind}
                     disabled={!canRewind}
                     aria-label="Rewind one action"
                     data-testid="rewind"
-                    className="flex size-12 touch-manipulation items-center justify-center rounded-[14px] border border-[var(--app-line)] bg-[var(--app-bg)] transition-all duration-100 active:scale-95 disabled:opacity-35"
+                    className="flex h-12 w-10 touch-manipulation items-center justify-center rounded-[14px] border border-[var(--app-line)] bg-[var(--app-bg)] transition-all duration-100 active:scale-95 disabled:opacity-35"
                   >
                     <SkipBack className="size-5" />
                   </button>
@@ -1512,7 +1515,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                     disabled={!canForward}
                     aria-label="Forward one action"
                     data-testid="forward"
-                    className="flex size-12 touch-manipulation items-center justify-center rounded-[14px] border border-[var(--app-line)] bg-[var(--app-bg)] transition-all duration-100 active:scale-95 disabled:opacity-35"
+                    className="flex h-12 w-10 touch-manipulation items-center justify-center rounded-[14px] border border-[var(--app-line)] bg-[var(--app-bg)] transition-all duration-100 active:scale-95 disabled:opacity-35"
                   >
                     <SkipForward className="size-5" />
                   </button>
@@ -1523,19 +1526,20 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                 disabled={phase === 'playing' || inHistory || (phase === 'plan' && queue.length === 0)}
                 aria-label={phase === 'preview' ? 'Stop preview' : 'Preview the queued turn'}
                 data-testid="preview-turn"
-                className="flex h-12 touch-manipulation items-center justify-center gap-1.5 rounded-[14px] border border-[var(--app-line)] bg-[var(--app-bg)] px-3.5 text-sm font-semibold text-[var(--app-muted)] transition-all duration-100 active:scale-95 disabled:opacity-35"
+                className={`flex h-12 shrink-0 touch-manipulation items-center justify-center gap-1.5 rounded-[14px] border border-[var(--app-line)] bg-[var(--app-bg)] ${compactControls ? 'w-12' : 'px-3.5'} text-sm font-semibold text-[var(--app-muted)] transition-all duration-100 active:scale-95 disabled:opacity-35`}
               >
                 {phase === 'preview' ? <Square className="size-4" /> : <Eye className="size-4" />}
-                {phase === 'preview' ? 'Stop' : 'Preview'}
+                {!compactControls && (phase === 'preview' ? 'Stop' : 'Preview')}
               </button>
               <button
                 onClick={() => beginTurn(true)}
                 disabled={queue.length === 0 || phase !== 'plan' || inHistory}
                 data-testid="play-turn"
-                className="flex h-12 flex-1 touch-manipulation items-center justify-center gap-2 rounded-[14px] bg-[var(--app-accent)] text-base font-bold text-[var(--app-accent-ink)] transition-all duration-100 active:scale-[0.97] disabled:opacity-40"
+                className="flex h-12 min-w-0 flex-1 touch-manipulation items-center justify-center gap-2 rounded-[14px] bg-[var(--app-accent)] text-base font-bold text-[var(--app-accent-ink)] transition-all duration-100 active:scale-[0.97] disabled:opacity-40"
               >
-                <PlayIcon className="size-5" />
-                Play
+                <PlayIcon className="size-5 shrink-0" />
+                {/* "Clear 4?" widens the trash; with the rewind controls there is room for the icon only */}
+                {!(compactControls && confirmClear) && 'Play'}
               </button>
               <button
                 onClick={() => {
@@ -1551,7 +1555,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                 aria-label={confirmClear ? `Tap again to clear ${queue.length} queued action${queue.length === 1 ? '' : 's'}` : 'Clear queued actions'}
                 data-testid="clear-queue"
                 data-confirm={confirmClear || undefined}
-                className={`flex h-12 touch-manipulation items-center justify-center gap-1 rounded-[14px] border transition-all duration-100 active:scale-95 disabled:opacity-35 ${
+                className={`flex h-12 shrink-0 touch-manipulation items-center justify-center gap-1 rounded-[14px] border transition-all duration-100 active:scale-95 disabled:opacity-35 ${
                   confirmClear ? 'w-auto border-red-400/60 bg-red-500/20 px-3 text-sm font-bold text-red-300' : 'size-12 border-[var(--app-line)] bg-[var(--app-bg)] text-[var(--app-muted)]'
                 }`}
               >
