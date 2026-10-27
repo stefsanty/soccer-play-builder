@@ -126,6 +126,36 @@ export function removeAction(queue: BuilderAction[], index: number, startHolder:
   return { queue: kept, dropped: without.filter((a) => !keptSet.has(a)) }
 }
 
+/** Who holds the ball just before `queue[index]` runs. */
+export function holderBefore(queue: BuilderAction[], index: number, startHolder: string | null): string | null {
+  return holderAfter(startHolder, queue.slice(0, index))
+}
+
+/** The types a queued action may be changed to while planning: a ball action may become any other
+ *  ball action (its owner has the ball at that point); a run stays a run. */
+export function editableKinds(queue: BuilderAction[], index: number, startHolder: string | null): ActionKind[] {
+  const a = queue[index]
+  if (!a || a.kind === 'run') return ['run']
+  return allowedKinds(a.playerId, holderBefore(queue, index, startHolder))
+}
+
+/** Swap the chip at `index` for `action` (an edited end point, type or target). Later actions that no
+ *  longer make sense — e.g. the old receiver's onward pass after a pass became a dribble — are dropped
+ *  and reported, as with removeAction. */
+export function replaceAction(queue: BuilderAction[], index: number, action: BuilderAction, startHolder: string | null): { queue: BuilderAction[]; dropped: BuilderAction[] } {
+  const swapped = queue.map((a, j) => (j === index ? action : a))
+  const kept = sanitizeQueue(swapped, startHolder)
+  const keptSet = new Set(kept)
+  return { queue: kept, dropped: swapped.filter((a) => !keptSet.has(a)) }
+}
+
+/** `to`, pulled back along the line from `from` so it is at most `range` metres away. */
+export function capToRange(from: Pt, to: Pt, range: number): Pt {
+  const d = dist(from, to)
+  if (d <= range) return to
+  return [from[0] + ((to[0] - from[0]) * range) / d, from[1] + ((to[1] - from[1]) * range) / d]
+}
+
 export function actionLabel(action: BuilderAction, labelOf: (id: string) => string): string {
   if (action.kind === 'pass') return `${labelOf(action.playerId)} → ${labelOf(action.to)}`
   return `${labelOf(action.playerId)} ${action.kind === 'dribble' ? 'dribbles' : action.kind === 'shot' ? 'shoots' : 'runs'}`
@@ -268,6 +298,8 @@ export function turnStep(actions: BuilderAction[], positions: Record<string, Pt>
     passes: sched.passes,
     defenderRules: {},
     faceTargets: [],
+    // the defenders come to rest with the last command instead of freezing in mid-sprint
+    stopAtEnd: true,
     // Near-immediate engagement, pressing readily — the reference's defenders start closing within
     // half a second of the ball moving; the default 0.4s reaction + mid aggression read as sluggish.
     ai: { opp: { on: true, aggressiveness: 70, reaction: 0.1 } },

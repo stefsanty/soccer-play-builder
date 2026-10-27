@@ -170,6 +170,9 @@ export interface PlayStep {
   builder?: BuilderStepMeta
   /** Starting ball spot in metres, authored on the setup step (steps[0]). Unset = centre pitch. */
   ballPosition?: { x: number; y: number }
+  /** Rule-driven (AI) players brake so the whole picture is at rest on the step's last frame — a
+   *  Turn Builder turn ends when the last command ends, and nobody may freeze in mid-sprint. */
+  stopAtEnd?: boolean
   id: string
   index: number
   title: string

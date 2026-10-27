@@ -460,7 +460,9 @@ export function simulateStep(play: Play, stepIndex: number, start: SimState, hol
       const dx = target[0] - p.x
       const dy = target[1] - p.y
       const d = Math.hypot(dx, dy)
-      const speed = Math.min(VMAX, d * gain, Math.sqrt(2 * AMAX * BRAKE * d)) // brake early enough to stop on the target
+      let speed = Math.min(VMAX, d * gain, Math.sqrt(2 * AMAX * BRAKE * d)) // brake early enough to stop on the target
+      // a stop-at-end step: brake early enough to be at rest on the last frame
+      if (step.stopAtEnd) speed = Math.min(speed, AMAX * BRAKE * Math.max(0, duration - t - H))
       const wx = d > 1e-6 ? (dx / d) * speed : 0
       const wy = d > 1e-6 ? (dy / d) * speed : 0
       let ax = wx - p.vx

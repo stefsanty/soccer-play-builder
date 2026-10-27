@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   actionInRange,
   allowedKinds,
+  capToRange,
+  editableKinds,
+  holderBefore,
+  replaceAction,
   buildSnapshots,
   holderAfter,
   queueAction,
@@ -385,5 +389,42 @@ describe('dribble → pass / dribble → shot chains (one player, one turn)', ()
     const tl = simulateStep(game, 1, initialState(game), 'o-LCB', positions['o-LCB'])
     expect(tl.duration).toBeCloseTo(s.plans[1].end)
     expect(tl.frames.at(-1)?.ball.holder).toBe('o-LST')
+  })
+})
+
+describe('editing a queued action while planning', () => {
+  const pass: BuilderAction = { kind: 'pass', playerId: 'a', to: 'b' }
+  const onward: BuilderAction = { kind: 'pass', playerId: 'b', to: 'c' }
+  const run: BuilderAction = { kind: 'run', playerId: 'c', toX: 10, toY: 10 }
+
+  it('holderBefore follows the chain up to (not including) the action', () => {
+    expect(holderBefore([pass, onward], 0, 'a')).toBe('a')
+    expect(holderBefore([pass, onward], 1, 'a')).toBe('b')
+  })
+
+  it('a ball action may become any ball action; a run stays a run', () => {
+    expect(editableKinds([pass, onward, run], 1, 'a')).toEqual(['pass', 'dribble', 'shot'])
+    expect(editableKinds([pass, onward, run], 2, 'a')).toEqual(['run'])
+  })
+
+  it('replaceAction swaps the chip in place and keeps its start time', () => {
+    const moved: BuilderAction = { kind: 'run', playerId: 'c', toX: 20, toY: 12, delay: 0.5 }
+    const { queue, dropped } = replaceAction([pass, run], 1, moved, 'a')
+    expect(queue).toEqual([pass, moved])
+    expect(dropped).toEqual([])
+  })
+
+  it('turning a pass into a dribble drops the old receiver`s onward pass, and says so', () => {
+    const dribble: BuilderAction = { kind: 'dribble', playerId: 'a', toX: 5, toY: 5 }
+    const { queue, dropped } = replaceAction([pass, onward, run], 0, dribble, 'a')
+    expect(queue).toEqual([dribble, run])
+    expect(dropped).toEqual([onward])
+  })
+
+  it('capToRange pulls a dragged end back to the range boundary', () => {
+    expect(capToRange([0, 0], [3, 4], 10)).toEqual([3, 4])
+    const c = capToRange([0, 0], [30, 40], 10)
+    expect(c[0]).toBeCloseTo(6)
+    expect(c[1]).toBeCloseTo(8)
   })
 })
