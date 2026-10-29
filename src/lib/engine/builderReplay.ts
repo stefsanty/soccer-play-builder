@@ -3,9 +3,11 @@
 // rebuilds the per-action rewind history exactly as it was when the game was saved.
 
 import type { Play } from '@/lib/types/play'
-import { initialState, simulateStep, type SimState } from '@/lib/engine/simulator'
+import { H, initialState, simulateStep, type SimState } from '@/lib/engine/simulator'
 import { buildSnapshots, holderAfter, scheduleTurn, type TurnSnapshot } from '@/lib/engine/turnBuilder'
 import { PITCH_H, PITCH_W } from '@/lib/engine/pitch'
+import { detectGoal } from '@/lib/engine/goal'
+import type { ResolvedTurn } from '@/lib/engine/gameTimeline'
 
 type Pt = [number, number]
 
@@ -14,6 +16,8 @@ export interface ReplayedGame {
   play: Play
   chain: { state: SimState; ball: Pt; holder: string } | null
   history: TurnSnapshot[]
+  /** Each rebuilt turn with its simulation: the one game timeline (engine/gameTimeline.ts). */
+  turns: ResolvedTurn[]
   holder: string
   /** Next turn to plan. */
   turn: number
@@ -41,6 +45,7 @@ export function replayGame(play: Play, labelOf: (id: string) => string): Replaye
     { turn: 0, actionIndex: 0, actionCount: 0, label: 'Kick-off', positions: positionsOf(state), holder },
   ]
   let chain: ReplayedGame['chain'] = null
+  const turns: ResolvedTurn[] = []
   let score = 0
   let rebuilt = 0
   for (let i = 1; i < play.steps.length; i++) {
@@ -48,6 +53,7 @@ export function replayGame(play: Play, labelOf: (id: string) => string): Replaye
     if (!meta?.actions) break
     const startPositions = positionsOf(state)
     const tl = simulateStep(play, i, state, holder, ball)
+    const startHolder = holder
     const plans = scheduleTurn(meta.actions, startPositions, meta.outcomes ?? {}).plans
     const endPositions = positionsOf(tl.end)
     const planned = holderAfter(holder, meta.actions)
@@ -62,6 +68,8 @@ export function replayGame(play: Play, labelOf: (id: string) => string): Replaye
     state = tl.end
     holder = next
     chain = { state, ball, holder }
+    const goal = detectGoal(tl.frames)
+    turns.push({ tl, plans, actions: meta.actions, startHolder, after: chain, goalAt: goal ? goal.frameIndex * H : null })
     if (meta.goal) score++
     rebuilt = i
   }
@@ -70,6 +78,7 @@ export function replayGame(play: Play, labelOf: (id: string) => string): Replaye
     play: skipped > 0 ? { ...play, steps: play.steps.slice(0, rebuilt + 1) } : play,
     chain,
     history,
+    turns,
     holder,
     turn: rebuilt + 1,
     score,

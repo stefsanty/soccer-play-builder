@@ -20,9 +20,16 @@
  * a full-back overlaps, forwards crash the box on a shot, a passer moves again once his pass is away —
  * drawn as thin dotted green arrows while planning and resolved as ordinary moves in the turn (user
  * commands always win: the keeper, commanded players and pass receivers are never moved by it). The
- * old ✓/× suggestion chips are gone. Every resolved action becomes
- * a rewind snapshot: ⏪ / ▶️ tween through them, and "Replan from here" branches the game from any
- * snapshot, discarding what came after.
+ * old ✓/× suggestion chips are gone.
+ * Live feedback (Stefan, 2026-10-30): a new command plays out at once — the queued turn re-simulates
+ * from that action's start to its end at double speed, and the pitch then rests on the turn's planned
+ * end (players where the plan leaves them, the AI's answer included); arrows stay as the paths taken.
+ * Drag a player's disc to move the end of his last run / dribble. Play still rolls the dice.
+ * One game timeline (engine/gameTimeline.ts): every resolved turn keeps its simulation; the strip at
+ * the top of the timeline box spans all turns plus the draft, with a tick per action end. Drag it, or
+ * ⏪ / ▶️, to go back: the pitch shows the exact simulated frame there. Nothing is deleted until you
+ * tap one of your players there — then the game branches from that point (later turns and later
+ * actions dropped; the toast offers Undo).
  * Mobile-first: turn counter top-right, rewind bottom-left, a two-row action queue of short chips
  * ("RCM→RST 0%") at the bottom that scrolls when a turn has more. Removing a chip that others depended
  * on says so in a toast at the foot of the pitch with Undo; the trash asks ("Clear 4?") before clearing.
@@ -44,15 +51,15 @@ import { ArrowLeft, Check, CircleDot, Eye, Minus, Play as PlayIcon, Plus, SkipBa
 import type { Play } from '@/lib/types/play'
 import { mToSvg, svgToFullM, PITCH_W, PITCH_H } from '@/lib/engine/pitch'
 import { createDefaultPlay } from '@/lib/engine/defaultPlay'
-import { H, initialState, sampleTimeline, simulateStep, type PlayerState, type SimState, type StepTimeline } from '@/lib/engine/simulator'
+import { H, initialState, sampleTimeline, simulateStep, type SimState, type StepTimeline } from '@/lib/engine/simulator'
 import { GOAL_CENTRE_X, GOAL_HALF_W, GOAL_LINE_Y, NET_DEPTH_M, detectGoal } from '@/lib/engine/goal'
 import { SHOT_RANGE_M, distToSegment, rollShot, shotChance } from '@/lib/engine/shot'
 import { dribbleRisk, passRisk, rollRisk, type Defender, type Risk } from '@/lib/engine/risk'
-import { newFollowTrack } from '@/lib/engine/follow'
 import { drawOrder } from '@/lib/engine/builderHints'
 import { planTeamShape, supportMovesToPlayerMoves, type SupportMove } from '@/lib/engine/teamShape'
 import { builderTitle, hasUnsavedWork } from '@/lib/engine/builderSave'
 import { replayGame } from '@/lib/engine/builderReplay'
+import { actionsDoneBy, atTurnEnd, buildMarkers, nearestMarker, type ResolvedTurn, type TimelinePoint } from '@/lib/engine/gameTimeline'
 import { SaveButton } from '@/components/editor/SaveButton'
 import { PitchMarkings } from '@/components/editor/PitchMarkings'
 import { PitchSurface } from '@/components/editor/PitchSurface'
@@ -60,7 +67,6 @@ import {
   actionInRange,
   actionLabel,
   allowedKinds,
-  buildSnapshots,
   capToRange,
   editableKinds,
   holderAfter,
@@ -79,7 +85,6 @@ import {
   type ActionPlan,
   type BuilderAction,
   type TurnOutcomes,
-  type TurnSnapshot,
 } from '@/lib/engine/turnBuilder'
 
 type Pt = [number, number]
@@ -113,7 +118,12 @@ const STATUS_H = 32
 const QUEUE_H = 54
 const TIMELINE_H = 62
 const LANE_H = 20
+/** The game strip across all turns, at the top of the timeline box. */
+const STRIP_H = 16
 const CONTROLS_H = 48
+/** Live feedback plays the new command at this many times real speed, and never longer than LIVE_MAX_S. */
+const LIVE_SPEED = 2
+const LIVE_MAX_S = 1.2
 const PANEL_BODY_H = STATUS_H + 8 + QUEUE_H + 8 + TIMELINE_H + 10 + CONTROLS_H
 /** Chip colour for a chance to score: green when likely, amber when even, red when a long shot. */
 const chanceColor = (p: number) => (p >= 0.5 ? '#16a34a' : p >= 0.25 ? '#d97706' : '#dc2626')
@@ -145,25 +155,6 @@ const pt = (x: number, y: number) => {
 const positionsOf = (state: SimState): Record<string, Pt> =>
   Object.fromEntries(Object.entries(state).map(([id, p]) => [id, [p.x, p.y] as Pt]))
 
-/** A fresh SimState standing at `positions` — how a replanned branch restarts from a snapshot. */
-const stateFromPositions = (play: Play, positions: Record<string, Pt>): SimState =>
-  Object.fromEntries(
-    play.players.map((p) => [
-      p.id,
-      {
-        x: positions[p.id]?.[0] ?? p.x,
-        y: positions[p.id]?.[1] ?? p.y,
-        vx: 0,
-        vy: 0,
-        face: p.team === 'ours' ? -Math.PI / 2 : Math.PI / 2,
-        faceTo: null,
-        rule: null,
-        fol: newFollowTrack(),
-        team: p.team,
-      } satisfies PlayerState,
-    ]),
-  )
-
 export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {}) {
   const [play, setPlay] = useState<Play | null>(null)
   // How many steps the last save stored; the game is "dirty" when there is more (or a queue).
@@ -176,8 +167,24 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const [turn, setTurn] = useState(1)
   // Latest resolved point of the game; null until the first turn resolves.
   const [chain, setChain] = useState<{ state: SimState; ball: Pt; holder: string } | null>(null)
-  const [history, setHistory] = useState<TurnSnapshot[]>([])
-  const [historyIdx, setHistoryIdx] = useState<number | null>(null)
+  // Every resolved turn with its simulation — the one game timeline — and the point being looked at
+  // (null = now). Looking back deletes nothing; a command there branches the game (branchFrom).
+  const [turns, setTurns] = useState<ResolvedTurn[]>([])
+  const [view, setView] = useState<TimelinePoint | null>(null)
+  // Live feedback for the command just queued (queue index): it plays out from its start at LIVE_SPEED.
+  // `prev` = what the pitch showed, eased out over the first part so nobody jumps.
+  const [liveAnim, setLiveAnim] = useState<{ index: number; prev: Record<string, Pt>; startMs: number } | null>(null)
+  const [liveNow, setLiveNow] = useState(0)
+  useEffect(() => {
+    if (!liveAnim) return
+    let raf = 0
+    const tick = (now: number) => {
+      setLiveNow(now)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [liveAnim])
   // A toast at the foot of the pitch, near the thumb; one with `undo` stays longer and offers it.
   const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null)
   const setFlash = useCallback((text: string | null) => setToast(text ? { text } : null), [])
@@ -192,7 +199,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   const [scrubT, setScrubT] = useState<number | null>(null)
   // A block being dragged to a new start time: visual position until the pointer lifts.
   const [blockDrag, setBlockDrag] = useState<{ index: number; start: number } | null>(null)
-  useEffect(() => setScrubT(null), [queue, phase, historyIdx])
+  useEffect(() => setScrubT(null), [queue, phase, view])
   // The queued action being edited (tap its chip, end ring or timeline block): drag its end, change
   // its type, nudge its start or delete it. `pickTarget` = waiting for a teammate tap to pass to.
   const [editing, setEditing] = useState<number | null>(null)
@@ -200,7 +207,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   useEffect(() => {
     setEditing(null)
     setPickTarget(false)
-  }, [phase, historyIdx])
+  }, [phase, view])
   useEffect(() => {
     if (editing !== null && editing >= queue.length) setEditing(null)
   }, [editing, queue.length])
@@ -227,7 +234,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     setSavedStepCount(game.play.steps.length)
     setHolder(game.holder)
     setChain(game.chain)
-    setHistory(game.history)
+    setTurns(game.turns)
     setTurn(game.turn)
     setScore(game.score)
     setPhase('plan')
@@ -253,6 +260,8 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
   // Who holds the ball when the turn ends, when the dice overrode the plan: after a shot (saved or
   // scored) or a lost ball, it comes back to that player for the next turn — no turnover.
   const returnToRef = useRef<string | null>(null)
+  // When the running turn's goal goes in (seconds), for the game timeline's score at any point.
+  const goalAtRef = useRef<number | null>(null)
 
   const running = phase === 'playing' || phase === 'preview'
   const dirty = !!play && hasUnsavedWork({ stepCount: play.steps.length, queued: queue.length, savedStepCount })
@@ -332,12 +341,12 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     return Object.fromEntries(play.players.map((p) => [p.id, [p.x, p.y] as Pt]))
   }, [play, chain])
 
-  const inHistory = historyIdx !== null
-  const viewSnapshot = inHistory ? history[historyIdx] : null
+  const inHistory = view !== null
 
   // The queued chain laid out in time: ghost arrows come from its plans and the range disc / gating
   // from its planned (post-move) positions, so a second queued run departs from the first one's target.
-  const schedule = useMemo(() => (phase === 'plan' && !inHistory ? scheduleTurn(queue, basePositions) : null), [phase, inHistory, queue, basePositions])
+  // Kept while looking back: the draft is the last stretch of the game timeline.
+  const schedule = useMemo(() => (phase === 'plan' ? scheduleTurn(queue, basePositions) : null), [phase, queue, basePositions])
   const planned = schedule?.planned ?? basePositions
   // Who will hold the ball once the queue so far has run — gating follows this through the chain.
   const projectedHolder = holderAfter(holder, queue)
@@ -394,7 +403,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
 
   // The queued turn fully simulated (draft): powers the timeline scrubber and both Preview and Play.
   const draft = useMemo(() => {
-    if (!play || phase !== 'plan' || inHistory || queue.length === 0) return null
+    if (!play || phase !== 'plan' || queue.length === 0) return null
     const stepIndex = play.steps.length
     const step = turnStep(queue, basePositions, stepIndex, {}, supportMoves)
     const nextPlay: Play = { ...play, steps: [...play.steps, step] }
@@ -402,33 +411,78 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     const startBall: Pt = chain ? chain.ball : (basePositions[holder ?? ''] ?? [PITCH_W / 2, PITCH_H / 2])
     const tl = simulateStep(nextPlay, stepIndex, start, holder, startBall)
     return { nextPlay, tl }
-  }, [play, phase, inHistory, queue, basePositions, chain, holder, supportMoves])
+  }, [play, phase, queue, basePositions, chain, holder, supportMoves])
 
-  // What the pitch shows right now: playback frame > scrub frame > history snapshot > planning state.
+  // The game timeline's step markers: kick-off, every action end of every turn, the draft's last.
+  const markers = useMemo(
+    () => buildMarkers(turns, phase === 'plan' && draft && schedule ? { plans: schedule.plans, duration: draft.tl.duration } : null, labelOf),
+    [turns, phase, draft, schedule, labelOf],
+  )
+  const markerIdx = view ? markers.findIndex((m) => m.turn === view.turn && Math.abs(m.t - view.t) < 1e-6) : markers.length - 1
+  const viewMarker = markerIdx >= 0 ? markers[markerIdx] : null
+  // The simulation the viewed point belongs to: a resolved turn, or the draft.
+  const viewTl = view ? (view.turn <= turns.length ? turns[view.turn - 1].tl : (draft?.tl ?? null)) : null
+
+  // Live feedback: the new command's stretch of the draft, at LIVE_SPEED.
+  const live = (() => {
+    if (!liveAnim || !draft || !schedule || running || inHistory) return null
+    const plan = schedule.plans.find((p) => p.action === queue[liveAnim.index])
+    if (!plan) return null
+    const t0 = Math.min(plan.start, draft.tl.duration)
+    const span = draft.tl.duration - t0
+    const wall = clamp(span / LIVE_SPEED, 0.35, LIVE_MAX_S)
+    const u = clamp((liveNow - liveAnim.startMs) / 1000 / wall, 0, 1)
+    return { t0, t: t0 + span * u, u }
+  })()
+  useEffect(() => {
+    if (liveAnim && (!live || live.u >= 1)) setLiveAnim(null)
+  }, [liveAnim, live])
+
+  // Moving frames (playback, live feedback, a scrub) hide the planning overlays.
   const frame =
     timeline && running
       ? sampleTimeline(timeline, progress * timeline.duration)
-      : scrubT !== null && draft
-        ? sampleTimeline(draft.tl, scrubT * draft.tl.duration)
-        : null
+      : live && draft
+        ? sampleTimeline(draft.tl, live.t)
+        : scrubT !== null && draft
+          ? sampleTimeline(draft.tl, scrubT * draft.tl.duration)
+          : null
+  // Still frames: a point looked back at, or — while planning — the queued turn's planned end.
+  const stillFrame = frame ?? (view && viewTl ? sampleTimeline(viewTl, view.t) : !inHistory && draft ? sampleTimeline(draft.tl, draft.tl.duration) : null)
   const shownPositions = useMemo<Record<string, Pt>>(() => {
-    if (frame) return Object.fromEntries(Object.entries(frame.players).map(([id, p]) => [id, [p.x, p.y] as Pt]))
-    if (viewSnapshot) return viewSnapshot.positions
-    return basePositions
-  }, [frame, viewSnapshot, basePositions])
+    if (!stillFrame) return basePositions
+    const out: Record<string, Pt> = Object.fromEntries(Object.entries(stillFrame.players).map(([id, p]) => [id, [p.x, p.y] as Pt]))
+    if (live && liveAnim && draft) {
+      // ease out of what the pitch showed before the command (its stretch start may differ a little)
+      const w = Math.max(0, 1 - live.u / 0.4) ** 2
+      if (w > 0) {
+        const s0 = sampleTimeline(draft.tl, live.t0).players
+        for (const [id, p] of Object.entries(out)) {
+          const prev = liveAnim.prev[id]
+          const at0 = s0[id]
+          if (prev && at0) out[id] = [p[0] + (prev[0] - at0.x) * w, p[1] + (prev[1] - at0.y) * w]
+        }
+      }
+    }
+    // the selected player stands where his next command starts (an AI-moved teammate goes back to his spot)
+    if (!frame && !inHistory && selected && basePositions[selected] && !queue.some((a) => a.playerId === selected)) out[selected] = basePositions[selected]
+    return out
+  }, [stillFrame, frame, basePositions, live, liveAnim, draft, inHistory, selected, queue])
 
+  const shownHolder = stillFrame ? stillFrame.ball.holder : holder
 
-  const shownHolder = frame ? frame.ball.holder : viewSnapshot ? viewSnapshot.holder : holder
-
-  // ⏪/▶️ tween the pitch between history states instead of teleporting — an instant flip to a
-  // slightly different arrangement reads as nothing happening.
+  // ⏪/▶️ tween the pitch between timeline points instead of teleporting — an instant flip to a
+  // slightly different arrangement reads as nothing happening. Each step bumps tweenKey.
   const displayedRef = useRef<Record<string, Pt> | null>(null)
+  const targetRef = useRef<Record<string, Pt> | null>(null)
+  targetRef.current = shownPositions
+  const [tweenKey, setTweenKey] = useState(0)
   const [animPositions, setAnimPositions] = useState<Record<string, Pt> | null>(null)
   const animRafRef = useRef<number | null>(null)
   useEffect(() => {
-    if (running) return
+    if (running || tweenKey === 0) return
     const from = displayedRef.current
-    const target = historyIdx !== null ? history[historyIdx]?.positions : chain ? positionsOf(chain.state) : null
+    const target = targetRef.current
     if (!from || !target) return
     const delta = Math.max(
       0,
@@ -457,13 +511,13 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       if (animRafRef.current !== null) cancelAnimationFrame(animRafRef.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyIdx])
+  }, [tweenKey])
 
   const renderPositions = !frame && animPositions ? animPositions : shownPositions
   displayedRef.current = renderPositions
 
-  const shownBall: Pt | null = frame
-    ? [frame.ball.x, frame.ball.y]
+  const shownBall: Pt | null = stillFrame && !(animPositions && !frame)
+    ? [stillFrame.ball.x, stillFrame.ball.y]
     : shownHolder && renderPositions[shownHolder]
       ? renderPositions[shownHolder]
       : null
@@ -497,8 +551,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       }
       // Turn resolved: commit the step, end state, holder and per-action snapshots.
       const plans = plansRef.current
-      const actions = plans.map((pl) => pl.action)
-      const startPositions = positionsOf(timeline.start)
+      const actions = pendingPlayRef.current?.steps.at(-1)?.builder?.actions ?? plans.map((pl) => pl.action)
       const endPositions = positionsOf(timeline.end)
       const lastBall = timeline.frames.at(-1)?.ball
       // After a shot or a lost ball the ball returns to that player (Stefan: no turnover; play carries on).
@@ -508,17 +561,13 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       const returned = override !== null
       if (pendingPlayRef.current) setPlay(pendingPlayRef.current)
       pendingPlayRef.current = null
-      setChain({
+      const after = {
         state: timeline.end,
-        ball: lastBall && !returned ? [lastBall.x, lastBall.y] : (endPositions[nextHolder ?? ''] ?? [PITCH_W / 2, PITCH_H / 2]),
+        ball: (lastBall && !returned ? [lastBall.x, lastBall.y] : (endPositions[nextHolder ?? ''] ?? [PITCH_W / 2, PITCH_H / 2])) as Pt,
         holder: nextHolder ?? '',
-      })
-      setHistory((h) => {
-        const snaps = buildSnapshots(turn, plans, startPositions, endPositions, holder, labelOf)
-        const last = snaps.at(-1)
-        if (last && returned) snaps[snaps.length - 1] = { ...last, holder: nextHolder }
-        return [...h, ...snaps]
-      })
+      }
+      setChain(after)
+      setTurns((ts) => [...ts, { tl: timeline, plans, actions, startHolder: holder, after, goalAt: goalAtRef.current }])
       setHolder(nextHolder)
       setTurn((t) => t + 1)
       setQueue([])
@@ -527,7 +576,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [running, phase, timeline, play, holder, turn, labelOf])
+  }, [running, phase, timeline, play, holder])
 
   // ---- interactions ----
   const toMeters = (e: { clientX: number; clientY: number }): Pt | null => {
@@ -543,8 +592,22 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     return [x, clamp(m.y, 2, inMouth ? GOAL_LINE_Y + NET_DEPTH_M : PITCH_H - 2)]
   }
 
+  /** Queue a new command and play it out at once (live feedback). */
+  const queueCommand = (action: BuilderAction) => {
+    setQueue((q) => queueAction(q, action))
+    setLiveAnim({ index: queue.length, prev: displayedRef.current ?? {}, startMs: performance.now() })
+  }
+
   const onPlayerTap = (id: string) => {
-    if (running || inHistory || !play) return
+    if (running || !play) return
+    if (performance.now() - grabClickRef.current < 500) return // a disc drag just ended
+    if (inHistory) {
+      // A command at a point looked back at: play on from there.
+      if (play.players.find((p) => p.id === id)?.team !== 'ours' || !view) return
+      branchFrom(view)
+      setSelected(id)
+      return
+    }
     if (scrubT !== null) {
       setScrubT(null)
       return
@@ -590,7 +653,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
         setFlash(`Too far — a pass can travel up to ${PASS_RANGE_M}m`)
         return
       }
-      setQueue((q) => queueAction(q, pass))
+      queueCommand(pass)
       setSelected(null)
     } else {
       setFlash(`${labelOf(selected)} won't have the ball — runs only`)
@@ -631,7 +694,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     if (kind === 'dribble' && Math.abs(m[0] - GOAL_CENTRE_X) <= GOAL_HALF_W && m[1] >= GOAL_LINE_Y - 0.5) {
       const target = shotTarget(m[0])
       if (Math.hypot(target[0] - from[0], target[1] - from[1]) <= SHOT_RANGE_M) {
-        setQueue((q) => queueAction(q, { kind: 'shot', playerId: selected, toX: target[0], toY: target[1] }))
+        queueCommand({ kind: 'shot', playerId: selected, toX: target[0], toY: target[1] })
         setSelected(null)
         return
       }
@@ -642,14 +705,14 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     if (to !== m) {
       setFlash(`Max range — ${labelOf(selected)} ${kind === 'dribble' ? 'dribbles' : 'runs'} ${Math.round(RUN_RANGE_M)}m toward it`)
     }
-    setQueue((q) => queueAction(q, { kind, playerId: selected, toX: to[0], toY: to[1] }))
+    queueCommand({ kind, playerId: selected, toX: to[0], toY: to[1] })
     // A dribbler stays selected: the next tap on a teammate passes from the dribble's end, the goal
     // mouth shoots from there (dribble → pass / dribble → shot in one turn).
     setSelected(kind === 'dribble' ? selected : null)
   }
 
   // ---- editing a queued action: grab its end ring (tap = edit, drag = move the end) ----
-  const grabRef = useRef<{ index: number; pointerId: number; x: number; y: number; moved: boolean } | null>(null)
+  const grabRef = useRef<{ index: number; pointerId: number; x: number; y: number; moved: boolean; disc?: boolean } | null>(null)
   const grabClickRef = useRef(0) // when the last grab ended (performance.now)
   /** Where action `a` ends if its end is dragged to `m`: runs / dribbles capped to the run range, a
    *  shot slides along the goal mouth. */
@@ -664,15 +727,18 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     }
     return null
   }
-  const onGrabDown = (e: React.PointerEvent, index: number) => {
+  /** `disc`: grabbed by the player's own disc (he stands on his run's end) — a plain tap still selects him. */
+  const onGrabDown = (e: React.PointerEvent, index: number, disc = false) => {
     e.stopPropagation()
     try {
       ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
     } catch {
       // capture can fail for exotic pointers; the drag still works per-event
     }
-    grabRef.current = { index, pointerId: e.pointerId, x: e.clientX, y: e.clientY, moved: false }
+    grabRef.current = { index, pointerId: e.pointerId, x: e.clientX, y: e.clientY, moved: false, disc }
   }
+  /** The player's last run / dribble in the queue (where his disc rests while planning), or -1. */
+  const lastMoveOf = (id: string) => queue.findLastIndex((a) => a.playerId === id && (a.kind === 'run' || a.kind === 'dribble'))
   const onGrabMove = (e: React.PointerEvent) => {
     const g = grabRef.current
     if (!g || e.pointerId !== g.pointerId) return
@@ -695,6 +761,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     const g = grabRef.current
     if (!g || e.pointerId !== g.pointerId) return
     grabRef.current = null
+    if (g.disc && !g.moved) return // a tap on the disc: the click selects him as usual
     grabClickRef.current = performance.now()
     if (!g.moved) startEdit(g.index)
   }
@@ -735,16 +802,6 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       ...play,
       steps: [{ ...play.steps[0], ...(h ? { ballPosition: { x: h[0], y: h[1] } } : {}), builder: { ...play.steps[0].builder, kickoffHolder: holder } }, ...play.steps.slice(1)],
     })
-    setHistory([
-      {
-        turn: 0,
-        actionIndex: 0,
-        actionCount: 0,
-        label: 'Kick-off',
-        positions: basePositions,
-        holder,
-      },
-    ])
     setPhase('plan')
   }
 
@@ -797,6 +854,8 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     const returnTo = lost ? lost.player : lastShot ? lastShot.action.playerId : null
     returnToRef.current = returnTo
     const goal = detectGoal(tl.frames)
+    goalAtRef.current = goal ? goal.frameIndex * H : null
+    setLiveAnim(null)
     if (commit) {
       // Builder bookkeeping on the step, so a saved game can be reopened here with its history.
       const last = nextPlay.steps.length - 1
@@ -833,40 +892,66 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     setPhase('plan')
   }
 
-  // ---- rewind / branch ----
-  const canRewind = phase === 'plan' && history.length > 1 && (historyIdx === null || historyIdx > 0)
+  // ---- the game timeline: look back, then branch on a command ----
+  const canRewind = phase === 'plan' && markerIdx > 0
   const canForward = inHistory
-  const rewind = () => {
-    if (!canRewind) return
+  /** Look at marker `i` (the last one = now). */
+  const goToMarker = (i: number, tween = true) => {
     setSelected(null)
-    setHistoryIdx((i) => (i === null ? history.length - 2 : Math.max(0, i - 1)))
+    setLiveAnim(null)
+    setView(i >= markers.length - 1 ? null : { turn: markers[i].turn, t: markers[i].t })
+    if (tween) setTweenKey((k) => k + 1)
+  }
+  const rewind = () => {
+    if (canRewind) goToMarker(markerIdx - 1)
   }
   const forward = () => {
-    if (historyIdx === null) return
-    const next = historyIdx + 1
-    setHistoryIdx(next >= history.length - 1 ? null : next)
+    if (canForward) goToMarker(markerIdx + 1)
   }
 
-  /** Branch the game from the viewed snapshot: everything after it is discarded and planning resumes
-   *  from exactly this arrangement (an interrupted turn is re-planned under its own number). */
-  const replanFromHere = () => {
-    if (historyIdx === null || !play) return
-    const snap = history[historyIdx]
-    const completedTurns = snap.actionIndex === snap.actionCount ? snap.turn : Math.max(0, snap.turn - 1)
-    const positions = snap.positions
-    setPlay({ ...play, steps: play.steps.slice(0, 1 + completedTurns) })
-    setChain({
-      state: stateFromPositions(play, positions),
-      ball: snap.holder ? (positions[snap.holder] ?? [PITCH_W / 2, PITCH_H / 2]) : [PITCH_W / 2, PITCH_H / 2],
-      holder: snap.holder ?? '',
+  /** Play on from point `v`: later turns go, and so do the actions of v's turn that had not ended by
+   *  then (the ones that had stay queued, to replay without dice). The toast offers Undo. */
+  const branchFrom = (v: TimelinePoint) => {
+    if (!play) return
+    const before = { play, chain, turns, holder, turn, score, queue }
+    setView(null)
+    setLiveAnim(null)
+    if (v.turn > turns.length) {
+      // inside the draft: drop the queued actions that end later
+      const kept = schedule ? actionsDoneBy(queue, schedule.plans, v.t) : []
+      if (kept.length === queue.length) return
+      setQueue(kept)
+      setToast({ text: `Removed ${queue.length - kept.length} later action${queue.length - kept.length === 1 ? '' : 's'}`, undo: () => restore(before) })
+      return
+    }
+    const tr = turns[v.turn - 1]
+    const atEnd = atTurnEnd(turns, v)
+    const keep = atEnd ? v.turn : v.turn - 1
+    const after = keep > 0 ? turns[keep - 1].after : null
+    setPlay({ ...play, steps: play.steps.slice(0, keep + 1) })
+    setChain(after)
+    setHolder(after ? after.holder || null : (play.steps[0]?.builder?.kickoffHolder ?? holder))
+    setTurns(turns.slice(0, keep))
+    setTurn(keep + 1)
+    setScore(turns.slice(0, keep).filter((x) => x.goalAt !== null).length)
+    setQueue(atEnd ? [] : actionsDoneBy(tr.actions, tr.plans, v.t))
+    if (atEnd && keep === turns.length && queue.length === 0) return // already now: nothing removed
+    setToast({
+      text: `Playing on from ${keep === 0 && v.t === 0 ? 'kick-off' : `turn ${v.turn}`} — later moves removed`,
+      undo: () => restore(before),
     })
-    setHolder(snap.holder)
-    setTurn(completedTurns + 1)
-    setHistory((h) => h.slice(0, historyIdx + 1))
-    setHistoryIdx(null)
-    setQueue([])
+  }
+  const restore = (g: { play: Play; chain: typeof chain; turns: ResolvedTurn[]; holder: string | null; turn: number; score: number; queue: BuilderAction[] }) => {
+    setPlay(g.play)
+    setChain(g.chain)
+    setTurns(g.turns)
+    setHolder(g.holder)
+    setTurn(g.turn)
+    setScore(g.score)
+    setQueue(g.queue)
+    setView(null)
     setSelected(null)
-    setFlash(`Replanning from ${snap.turn === 0 ? 'kick-off' : `turn ${snap.turn}`} — later turns discarded`)
+    setToast(null)
   }
 
   // ---- timeline scrub & retime ----
@@ -876,17 +961,61 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
     return clamp((clientX - r.left) / r.width, 0, 1)
   }
   const onTlPointerDown = (e: React.PointerEvent) => {
-    if (!draft) return
+    if (!(view && viewTl) && !draft) return
     try {
       e.currentTarget.setPointerCapture(e.pointerId)
     } catch {
       // capture can fail for exotic pointers; scrubbing still works per-event
     }
-    setScrubT(tlTimeAt(e.clientX))
+    // looking back: scrub within that turn (snaps to a step on release); now: peek into the draft
+    if (view && viewTl) setView({ turn: view.turn, t: tlTimeAt(e.clientX) * viewTl.duration })
+    else setScrubT(tlTimeAt(e.clientX))
   }
   const onTlPointerMove = (e: React.PointerEvent) => {
-    if (!draft || !e.currentTarget.hasPointerCapture(e.pointerId)) return
-    setScrubT(tlTimeAt(e.clientX))
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
+    if (view && viewTl) setView({ turn: view.turn, t: tlTimeAt(e.clientX) * viewTl.duration })
+    else if (draft) setScrubT(tlTimeAt(e.clientX))
+  }
+  const onTlPointerUp = () => {
+    if (view) goToMarker(nearestMarker(markers, view), false)
+  }
+
+  // ---- the game strip: every turn side by side (equal widths), the draft last ----
+  const stripRef = useRef<HTMLDivElement>(null)
+  const stripTurns = turns.length + (draft ? 1 : 0)
+  const durationOf = (turnNo: number) => (turnNo <= turns.length ? turns[turnNo - 1].tl.duration : (draft?.tl.duration ?? 1))
+  const stripX = (p: TimelinePoint) => (stripTurns === 0 ? 0 : (p.turn - 1 + clamp(p.t / (durationOf(p.turn) || 1), 0, 1)) / stripTurns)
+  const stripPoint = (clientX: number): TimelinePoint | null => {
+    const r = stripRef.current?.getBoundingClientRect()
+    if (!r || r.width === 0 || stripTurns === 0) return null
+    const f = clamp((clientX - r.left) / r.width, 0, 0.99999) * stripTurns
+    const turnNo = Math.floor(f) + 1
+    return { turn: turnNo, t: (f - Math.floor(f)) * durationOf(turnNo) }
+  }
+  const onStripPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    if (phase !== 'plan') return
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // capture can fail for exotic pointers; scrubbing still works per-event
+    }
+    const p = stripPoint(e.clientX)
+    if (!p) return
+    setSelected(null)
+    setLiveAnim(null)
+    setView(p)
+  }
+  const onStripPointerMove = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
+    const p = stripPoint(e.clientX)
+    if (p) setView(p)
+  }
+  const onStripPointerUp = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    const p = stripPoint(e.clientX)
+    if (p) goToMarker(nearestMarker(markers, p), false)
   }
   const blockDragRef = useRef<{ index: number; pointerId: number; grabOffset: number; durS: number; x: number; moved: boolean } | null>(null)
   const onBlockPointerDown = (e: React.PointerEvent, index: number, plan: ActionPlan) => {
@@ -938,10 +1067,10 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
       ? holder
         ? `${labelOf(holder)} starts with the ball — tap Start, or pick someone else`
         : 'Tap one of your (blue) players to give them the ball'
-      : inHistory && viewSnapshot
-        ? viewSnapshot.turn === 0
-          ? 'History — Kick-off · step ▶ to return, or replan from here'
-          : `History — Turn ${viewSnapshot.turn}, action ${viewSnapshot.actionIndex}/${viewSnapshot.actionCount}: ${viewSnapshot.label}`
+      : view
+        ? viewMarker
+          ? `${viewMarker.label === 'Kick-off' ? 'Kick-off' : `Turn ${view.turn} · after ${viewMarker.label}`} — tap a blue player to play on from here (later moves go), ▶ to return`
+          : `Turn ${view.turn} · ${view.t.toFixed(1)}s`
         : phase === 'playing'
           ? 'Playing…'
           : phase === 'preview'
@@ -964,11 +1093,19 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                     ? `${support.length} teammate${support.length === 1 ? '' : 's'} move with the plan (dotted) — tap one to command him instead`
                     : 'Tap a blue player to select; actions chain in queue order'
 
-  const compactControls = history.length > 1
+  const compactControls = markers.length > 1
 
-  // timeline lanes: one row per player that has actions, in order of first appearance
+  // timeline lanes: the turn being looked at (a played one is read-only), else the draft; one row per
+  // player that has actions, in order of first appearance
+  const pastTurn = view && view.turn <= turns.length ? turns[view.turn - 1] : null
+  const lanePlans = pastTurn ? pastTurn.plans : (schedule?.plans ?? [])
+  const laneDuration = pastTurn ? pastTurn.tl.duration || 1 : tlDuration
+  const showLanes = phase === 'plan' && (!!pastTurn || (!!schedule && queue.length > 0))
+  const playheadS = view ? view.t : scrubSeconds
   const lanes: string[] = []
-  if (schedule) for (const p of schedule.plans) if (!lanes.includes(p.action.playerId)) lanes.push(p.action.playerId)
+  for (const p of lanePlans) if (!lanes.includes(p.action.playerId)) lanes.push(p.action.playerId)
+  // goals up to the point looked at
+  const shownScore = view ? turns.filter((x, i) => i + 1 < view.turn || (i + 1 === view.turn && x.goalAt !== null && view.t >= x.goalAt)).filter((x) => x.goalAt !== null).length : score
 
   return (
     <div className="flex h-dvh flex-col bg-[var(--app-bg)] text-[#e8edf2]">
@@ -982,12 +1119,12 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
         </div>
         <div className="relative flex items-center gap-1.5">
           {phase !== 'setup' && (
-            <div data-testid="score" aria-label={`${score} goals`} className="rounded-full border border-white/10 bg-[var(--app-card)] px-3 py-1 text-sm font-semibold tabular-nums">
-              ⚽ {score}
+            <div data-testid="score" aria-label={`${shownScore} goals`} className="rounded-full border border-white/10 bg-[var(--app-card)] px-3 py-1 text-sm font-semibold tabular-nums">
+              ⚽ {shownScore}
             </div>
           )}
           <div data-testid="turn-counter" className="rounded-full border border-white/10 bg-[var(--app-card)] px-3 py-1 text-sm font-semibold">
-            {phase === 'setup' ? 'Setup' : inHistory && viewSnapshot ? `Turn ${viewSnapshot.turn}` : `Turn ${turn}`}
+            {phase === 'setup' ? 'Setup' : view ? `Turn ${view.turn}` : `Turn ${turn}`}
           </div>
           {/* Save the game as a play (the editor's own save path): setup + one step per resolved turn */}
           {phase !== 'setup' && (
@@ -1208,9 +1345,17 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                 data-out-of-range={outOfPassRange || undefined}
                 // a disc you can't tap (defenders, or anyone mid-playback) lets the tap through to an
                 // end ring under it — a run often ends right on the man marking him
-                pointerEvents={tappable ? undefined : 'none'}
+                pointerEvents={tappable || (isOurs && inHistory && !running) ? undefined : 'none'}
+                // drag the disc of a player who runs / dribbles to move that move's end (he rests on it)
+                onPointerDown={(e) => {
+                  if (!tappable || phase !== 'plan') return
+                  const i = lastMoveOf(p.id)
+                  if (i >= 0) onGrabDown(e, i, true)
+                }}
+                onPointerMove={onGrabMove}
+                onPointerUp={onGrabUp}
                 onClick={(e) => {
-                  if (!tappable) return
+                  if (!tappable && !(isOurs && inHistory)) return
                   e.stopPropagation()
                   onPlayerTap(p.id)
                 }}
@@ -1345,11 +1490,11 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
         {inHistory && (
           <div className="absolute inset-x-0 bottom-3 flex justify-center">
             <button
-              onClick={replanFromHere}
-              data-testid="replan-here"
+              onClick={() => goToMarker(markers.length - 1)}
+              data-testid="back-to-now"
               className="touch-manipulation rounded-full bg-[var(--app-accent)] px-5 py-2 text-xs font-bold text-[var(--app-accent-ink)] shadow-lg transition-all duration-100 active:scale-95"
             >
-              Replan from here
+              Back to now
             </button>
           </div>
         )}
@@ -1390,7 +1535,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
               data-testid="action-queue"
             >
               {inHistory ? (
-                <span className="text-xs text-[var(--app-muted)]">{viewSnapshot?.label}</span>
+                <span className="text-xs text-[var(--app-muted)]">{viewMarker ? (viewMarker.label === 'Kick-off' ? 'Kick-off' : `Turn ${viewMarker.turn} · after ${viewMarker.label}`) : `Turn ${view?.turn}`}</span>
               ) : queue.length === 0 ? (
                 <span className="text-xs text-[#5b6977]">No actions queued</span>
               ) : (
@@ -1437,58 +1582,101 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
               )}
             </div>
 
-            {/* turn timeline: scrub to preview any moment, drag a block to retime its action.
-                The box is always there at a fixed height (two lanes; more scroll) so the pitch never moves. */}
+            {/* timeline: on top the game strip — every turn played plus the one being planned, a tick per
+                action end; drag it or ⏪/▶️ to go back. Below, the lanes of the turn under the playhead:
+                scrub to see any moment, drag a block of the planned turn to retime it. The box is always
+                there at a fixed height (strip + two lanes; more scroll) so the pitch never moves. */}
             <div
               ref={tlRef}
               data-testid="turn-timeline"
-              className={`relative mb-2.5 touch-none select-none overflow-y-auto overflow-x-hidden rounded-lg border border-[var(--app-line)] bg-[var(--app-bg)] ${schedule && queue.length > 0 && !inHistory && phase === 'plan' ? '' : 'opacity-40'}`}
+              className="relative mb-2.5 touch-none select-none overflow-y-auto overflow-x-hidden rounded-lg border border-[var(--app-line)] bg-[var(--app-bg)]"
               style={{ height: TIMELINE_H }}
               onPointerDown={onTlPointerDown}
               onPointerMove={onTlPointerMove}
+              onPointerUp={onTlPointerUp}
             >
-              {schedule && queue.length > 0 && !inHistory && phase === 'plan' ? (
-                <div className="relative" style={{ height: Math.max(TIMELINE_H - 2, 22 + lanes.length * LANE_H) }}>
+              <div
+                ref={stripRef}
+                data-testid="game-strip"
+                className="sticky top-0 z-10 flex border-b border-[var(--app-line)] bg-[var(--app-bg)]"
+                style={{ height: STRIP_H }}
+                onPointerDown={onStripPointerDown}
+                onPointerMove={onStripPointerMove}
+                onPointerUp={onStripPointerUp}
+              >
+                {stripTurns === 0 ? (
+                  <span className="flex flex-1 items-center justify-center text-[9px] text-[var(--app-muted)]">Game timeline — each turn appears here</span>
+                ) : (
+                  Array.from({ length: stripTurns }, (_, i) => {
+                    const isDraft = i === turns.length
+                    const here = (view ? view.turn : stripTurns) === i + 1
+                    return (
+                      <div
+                        key={i}
+                        data-testid={`strip-turn-${i + 1}`}
+                        className={`relative flex flex-1 items-center justify-center border-r border-white/10 text-[8px] font-bold leading-none ${isDraft ? 'bg-[#ffd43b]/10 text-[#ffd43b]' : here ? 'bg-white/10 text-[#e8edf2]' : 'text-[var(--app-muted)]'}`}
+                      >
+                        {stripTurns <= 12 || here ? (isDraft ? 'plan' : i + 1) : ''}
+                        {turns[i]?.goalAt != null && <span className="absolute right-0.5 top-0 text-[7px]">⚽</span>}
+                      </div>
+                    )
+                  })
+                )}
+                {/* step markers and the playhead */}
+                {stripTurns > 0 &&
+                  markers.map((m, i) => (
+                    <div key={i} className="pointer-events-none absolute bottom-0 h-1.5 w-px bg-white/50" style={{ left: `${stripX(m) * 100}%` }} />
+                  ))}
+                {stripTurns > 0 && (
+                  <div
+                    data-testid="strip-playhead"
+                    className="pointer-events-none absolute -bottom-px top-0 w-0.5 bg-[#ffd43b]"
+                    style={{ left: `calc(${stripX(view ?? markers[markers.length - 1]) * 100}% - 1px)` }}
+                  />
+                )}
+              </div>
+              {showLanes ? (
+                <div className="relative" style={{ height: Math.max(TIMELINE_H - 2 - STRIP_H, 22 + lanes.length * LANE_H) }}>
                 {/* second ticks */}
-                {Array.from({ length: Math.floor(tlDuration) }, (_, i) => i + 1).map((s) => (
-                  <div key={s} className="absolute bottom-0 top-0 w-px bg-white/10" style={{ left: `${(s / tlDuration) * 100}%` }}>
+                {Array.from({ length: Math.floor(laneDuration) }, (_, i) => i + 1).map((s) => (
+                  <div key={s} className="absolute bottom-0 top-0 w-px bg-white/10" style={{ left: `${(s / laneDuration) * 100}%` }}>
                     <span className="absolute bottom-0 left-0.5 text-[8px] leading-none text-[var(--app-muted)]">{s}s</span>
                   </div>
                 ))}
-                {/* action blocks */}
-                {schedule.plans.map((plan, i) => {
+                {/* action blocks (a played turn's are read-only) */}
+                {lanePlans.map((plan, i) => {
                   const lane = lanes.indexOf(plan.action.playerId)
-                  const start = blockDrag?.index === i ? blockDrag.start : plan.start
-                  const w = Math.max(3, ((plan.end - plan.start) / tlDuration) * 100)
-                  const active = scrubSeconds !== null && scrubSeconds >= start && scrubSeconds <= start + (plan.end - plan.start)
+                  const start = !view && blockDrag?.index === i ? blockDrag.start : plan.start
+                  const w = Math.max(3, ((plan.end - plan.start) / laneDuration) * 100)
+                  const active = playheadS !== null && playheadS >= start && playheadS <= start + (plan.end - plan.start)
                   return (
                     <div
                       key={i}
                       data-testid={`tl-block-${i}`}
-                      className="absolute flex h-4 cursor-grab items-center overflow-hidden whitespace-nowrap rounded px-1 text-[9px] font-bold leading-none text-[#0b1015]"
+                      className={`absolute flex h-4 items-center overflow-hidden whitespace-nowrap rounded px-1 text-[9px] font-bold leading-none text-[#0b1015] ${view ? 'pointer-events-none opacity-80' : 'cursor-grab'}`}
                       style={{
                         top: 3 + lane * LANE_H,
-                        left: `${(start / tlDuration) * 100}%`,
+                        left: `${(start / laneDuration) * 100}%`,
                         width: `${w}%`,
                         background: BLOCK_COLORS[plan.action.kind],
-                        outline: active ? '2px solid #ffd43b' : blockDrag?.index === i || queue[editing ?? -1] === plan.action ? `2px solid ${EDIT}` : 'none',
+                        outline: active ? '2px solid #ffd43b' : !view && (blockDrag?.index === i || queue[editing ?? -1] === plan.action) ? `2px solid ${EDIT}` : 'none',
                       }}
-                      onPointerDown={(e) => onBlockPointerDown(e, i, plan)}
-                      onPointerMove={onBlockPointerMove}
-                      onPointerUp={onBlockPointerUp}
+                      onPointerDown={view ? undefined : (e) => onBlockPointerDown(e, i, plan)}
+                      onPointerMove={view ? undefined : onBlockPointerMove}
+                      onPointerUp={view ? undefined : onBlockPointerUp}
                     >
                       {shortLabel(plan.action, labelOf)}
                     </div>
                   )
                 })}
                 {/* playhead */}
-                {scrubT !== null && (
-                  <div className="pointer-events-none absolute bottom-0 top-0 w-0.5 bg-[#ffd43b]" style={{ left: `${scrubT * 100}%` }} />
+                {playheadS !== null && (
+                  <div className="pointer-events-none absolute bottom-0 top-0 w-0.5 bg-[#ffd43b]" style={{ left: `${clamp(playheadS / laneDuration, 0, 1) * 100}%` }} />
                 )}
                 </div>
               ) : (
-                <div className="flex h-full items-center justify-center text-[10px] text-[var(--app-muted)]">
-                  {inHistory ? 'History' : 'Timeline — queue an action to scrub and retime it'}
+                <div className="flex items-center justify-center text-[10px] text-[var(--app-muted)] opacity-60" style={{ height: TIMELINE_H - 2 - STRIP_H }}>
+                  {phase === 'plan' ? 'Queue an action — it plays out at once; scrub here, drag a block to retime' : ''}
                 </div>
               )}
             </div>
@@ -1508,7 +1696,7 @@ export function BuilderClient({ initialPlay }: { initialPlay?: Play | null } = {
                     <SkipBack className="size-5" />
                   </button>
                   <span className="w-9 text-center text-xs font-semibold tabular-nums text-[var(--app-muted)]" data-testid="history-pos">
-                    {(historyIdx ?? history.length - 1) + 1}/{history.length}
+                    {Math.max(0, markerIdx) + 1}/{markers.length}
                   </span>
                   <button
                     onClick={forward}
